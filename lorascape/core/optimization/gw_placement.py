@@ -221,9 +221,10 @@ def _greedy_select(
 
 def optimize_gw_placement(
     nodes: list[NodeSite], dem,
-    initial_k: int = 1, max_k: int = 15, coverage_target: float = 0.95,
+    initial_k: int = 1, max_k: int = 20, coverage_target: float = 0.95,
     fc_mhz: float = 920.0, environment: str = "urban",
     max_path_loss_db: float = DEFAULT_MAX_PATH_LOSS_DB,
+    candidate_pool_multiplier: int = 3,  # ★ 추가: 후보 풀을 max_k보다 넉넉하게 뽑기 위한 배수
     **link_kwargs,
 ) -> OptimizationResult:
     """
@@ -239,7 +240,7 @@ def optimize_gw_placement(
         raise ValueError("nodes가 비어있음 - 최적화할 대상이 없음")
 
     coords = np.array([latlon_to_xy(n.lat, n.lon) for n in nodes])
-    pool_size = min(max_k, len(nodes))
+    pool_size = min(max_k * candidate_pool_multiplier, len(nodes))
 
     candidates = _build_candidate_pool(nodes, coords, pool_size, dem)
     matrix = _compute_link_matrix(candidates, nodes, dem, fc_mhz, environment, max_path_loss_db, **link_kwargs)

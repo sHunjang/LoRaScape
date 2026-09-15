@@ -6,7 +6,10 @@ GatewaySite / NodeSite 리스트로 변환하는 모듈임.
 이 엑셀은 헤더가 2줄짜리 구조임 (1행: 대분류 '기본 정보'/'설치'/'전원'/'통신'/'기타',
 2행: 실제 컬럼명). pandas로 읽을 때 header=1로 2번째 행을 컬럼명으로 잡아야 함.
 """
+
 import pandas as pd
+import math
+
 from lorascape.data.schema import GatewaySite, NodeSite, DEFAULT_ANTENNA_HEIGHT_M
 
 # GW 위치로 취급할 시트 이름들임. '스마트폴'은 GW를 얹는 폴이라 GW 후보지로 취급하고,
@@ -18,8 +21,17 @@ NODE_SHEETS = ["센서", "CCTV, MIC", "AI 엣지 박스", "기타 시설물"]
 
 
 def _clean(value):
-    """엑셀 셀 값 정리 함수임. '-' 나 빈 문자열, NaN을 전부 None으로 통일함."""
+    """
+    엑셀 셀 값 정리 함수임. '-' 나 빈 문자열, NaN을 전부 None으로 통일함.
+
+    ★ 버그 수정: 원래 문자열 형태의 빈값("-", "" 등)만 걸러내고 있었는데,
+    pandas가 엑셀의 빈 셀을 float NaN으로 읽어오는 경우(특히 좌표 컬럼)를
+    놓치고 있었음. NaN이 그대로 GatewaySite/NodeSite에 들어가서
+    K-means 같은 후속 계산에서 "Input X contains NaN" 에러로 터짐.
+    """
     if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
         return None
     if isinstance(value, str) and value.strip() in ("", "-", "TBD", "n/a"):
         return None

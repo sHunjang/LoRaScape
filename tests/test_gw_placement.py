@@ -196,7 +196,7 @@ def test_link_matrix_computed_exactly_once_per_pair():
 
     result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=5, coverage_target=1.0)
 
-    pool_size = min(5, len(nodes))  # optimize_gw_placement 내부와 동일한 pool_size 계산
+    pool_size = min(5 * 3, len(nodes))  # candidate_pool_multiplier 기본값 3 반영
     expected_calls = pool_size * len(nodes)
     assert call_count["n"] == expected_calls
 
