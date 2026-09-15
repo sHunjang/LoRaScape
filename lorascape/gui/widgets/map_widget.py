@@ -128,7 +128,7 @@ class MapWidget(QWidget):
         center = [(b[1] + b[3]) / 2, (b[0] + b[2]) / 2]
         span = max(b[2] - b[0], b[3] - b[1])
         zoom = 14 if span < 0.1 else 12 if span < 0.5 else 10 if span < 2.0 else 8
-        tile = map_tile or "CartoDB Voyager"
+        tile = "OpenStreetMap"
 
         m = folium.Map(location=center, zoom_start=zoom, tiles=tile, prefer_canvas=True)
         gw_color_map = layers.build_gw_color_map(gws)
