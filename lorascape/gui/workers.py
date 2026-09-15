@@ -16,22 +16,30 @@ from lorascape.core.optimization.gw_placement import optimize_gw_placement
 
 
 class LoadDataWorker(QObject):
-    """엑셀 인벤토리 + DEM을 백그라운드에서 로딩하는 워커임."""
-    finished = pyqtSignal(list, list)  # gateways, nodes
+    """
+    엑셀 인벤토리를 백그라운드에서 로딩하는 워커임.
+
+    load_gateways/load_nodes 플래그로 어느 쪽을 읽을지 선택함 - GW목록창에서
+    불러오면 GW만, 단말목록창에서 불러오면 Node만 갱신되게 하려고 분리함
+    (전에는 무조건 둘 다 읽어서, 한쪽 창에서 다른 종류의 엑셀을 넣어도
+    반대쪽 목록까지 같이 바뀌어버리는 문제가 있었음).
+    """
+    finished = pyqtSignal(object, object)  # gateways(list|None), nodes(list|None)
     error = pyqtSignal(str)
 
-    def __init__(self, xlsx_path: str):
+    def __init__(self, xlsx_path: str, load_gateways: bool = True, load_nodes: bool = True):
         super().__init__()
         self.xlsx_path = xlsx_path
+        self.should_load_gateways = load_gateways
+        self.should_load_nodes = load_nodes
 
     def run(self):
         try:
-            gateways = load_gateways(self.xlsx_path)
-            nodes = load_nodes(self.xlsx_path)
+            from lorascape.data.site_inventory import load_gateways as _load_gw, load_nodes as _load_nd
+            gateways = _load_gw(self.xlsx_path) if self.should_load_gateways else None
+            nodes = _load_nd(self.xlsx_path) if self.should_load_nodes else None
             self.finished.emit(gateways, nodes)
         except Exception as e:
-            # 워커 스레드 안에서 예외가 나면 조용히 죽어버리니까, 반드시 시그널로
-            # 메인 스레드에 전달해서 사용자에게 보여줘야 함 (안 그러면 원인 파악 불가능).
             self.error.emit(str(e))
 
 

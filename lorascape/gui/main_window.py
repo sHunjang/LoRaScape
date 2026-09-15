@@ -115,17 +115,45 @@ class MainWindow(QMainWindow):
         self._load_data()
 
     def _load_data(self):
+        """초기 로딩(생성자에서 xlsx_path 받았을 때)임 - GW/Node 둘 다 읽음."""
         self.status_label.setText("데이터 로딩 중...")
-        self._start_worker(LoadDataWorker(self.xlsx_path), self._on_data_loaded)
+        worker = LoadDataWorker(self.xlsx_path, load_gateways=True, load_nodes=True)
+        self._start_worker(worker, lambda gws, nds: self._on_data_loaded(gws, nds, target="both"))
 
-    def _on_data_loaded(self, gateways, nodes):
-        self.gateways = gateways
-        self.nodes = nodes
-        self.status_label.setText(f"GW {len(gateways)}개, Node {len(nodes)}개 로드됨")
+    def _on_excel_load_requested(self, path: str, target: str):
+        """
+        GW목록창 또는 단말목록창에서 '엑셀 불러오기'를 눌렀을 때 호출됨.
+        target='gw'면 GW만, target='node'면 Node만 읽어서 해당 목록/지도만 갱신함
+        (요청하신 대로 두 목록이 서로 다른 엑셀 파일을 각자 독립적으로 쓸 수 있게 하려고).
+        """
+        self.status_label.setText("데이터 로딩 중...")
+        worker = LoadDataWorker(
+            path,
+            load_gateways=(target in ("gw", "both")),
+            load_nodes=(target in ("node", "both")),
+        )
+        self._start_worker(worker, lambda gws, nds: self._on_data_loaded(gws, nds, target=target))
 
-        if gateways or nodes:
-            all_lats = [g.lat for g in gateways] + [n.lat for n in nodes]
-            all_lons = [g.lon for g in gateways] + [n.lon for n in nodes]
+    def _on_data_loaded(self, gateways, nodes, target: str):
+        """
+        gateways/nodes 중 로드 안 한 쪽은 None으로 들어옴 - 그 경우 기존 값을 그대로 유지함.
+        target은 로그 메시지 용도로만 씀 (실제 갱신 범위는 gateways/nodes가 None인지로 판단).
+        """
+        if gateways is not None:
+            self.gateways = gateways
+        if nodes is not None:
+            self.nodes = nodes
+
+        if gateways is not None and nodes is not None:
+            self.status_label.setText(f"GW {len(self.gateways)}개, Node {len(self.nodes)}개 로드됨")
+        elif gateways is not None:
+            self.status_label.setText(f"GW {len(self.gateways)}개 로드됨 (Node는 기존 {len(self.nodes)}개 유지)")
+        elif nodes is not None:
+            self.status_label.setText(f"Node {len(self.nodes)}개 로드됨 (GW는 기존 {len(self.gateways)}개 유지)")
+
+        if self.gateways or self.nodes:
+            all_lats = [g.lat for g in self.gateways] + [n.lat for n in self.nodes]
+            all_lons = [g.lon for g in self.gateways] + [n.lon for n in self.nodes]
             margin_lat = (max(all_lats) - min(all_lats)) * 0.1 or 0.01
             margin_lon = (max(all_lons) - min(all_lons)) * 0.1 or 0.01
             bounds = (
@@ -136,10 +164,10 @@ class MainWindow(QMainWindow):
 
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
 
-        # 목록창이 이미 열려있으면 같이 갱신함
-        if self._gw_list_win is not None:
+        # 갱신된 쪽의 목록창만 새로고침함 (안 바뀐 쪽은 그대로 둠)
+        if gateways is not None and self._gw_list_win is not None:
             self._gw_list_win.set_gateways(self.gateways)
-        if self._node_list_win is not None:
+        if nodes is not None and self._node_list_win is not None:
             self._node_list_win.set_nodes(self.nodes)
 
     # ── 최적화 실행 ──────────────────────────────────────────
@@ -242,7 +270,9 @@ class MainWindow(QMainWindow):
         if self._gw_list_win is None:
             self._gw_list_win = GWListWindow(self.gateways, parent=self)
             self._gw_list_win.sig_gws_changed.connect(self._on_gws_changed_from_list)
-            self._gw_list_win.sig_load_excel_requested.connect(self._on_excel_load_requested)
+            self._gw_list_win.sig_load_excel_requested.connect(
+                lambda path: self._on_excel_load_requested(path, target="gw")
+            )
         else:
             self._gw_list_win.set_gateways(self.gateways)
         return self._gw_list_win
@@ -252,19 +282,12 @@ class MainWindow(QMainWindow):
         if self._node_list_win is None:
             self._node_list_win = NodeListWindow(self.nodes, parent=self)
             self._node_list_win.sig_nodes_changed.connect(self._on_nodes_changed_from_list)
-            self._node_list_win.sig_load_excel_requested.connect(self._on_excel_load_requested)
+            self._node_list_win.sig_load_excel_requested.connect(
+                lambda path: self._on_excel_load_requested(path, target="node")
+            )
         else:
             self._node_list_win.set_nodes(self.nodes)
         return self._node_list_win
-
-    def _on_excel_load_requested(self, path: str):
-        """
-        GW목록창 또는 단말목록창에서 '엑셀 불러오기'를 눌렀을 때 호출됨.
-        어느 창에서 눌렀든 GW/Node 둘 다 다시 로드하고, 지도와 두 목록창을 전부 갱신함
-        (한 엑셀에 GW/Node 시트가 같이 있으니, 하나만 갱신하면 서로 데이터가 어긋날 수 있어서).
-        """
-        self.xlsx_path = path
-        self._load_data()
 
     def _open_gw_list(self):
         win = self._ensure_gw_list_win()
