@@ -55,3 +55,21 @@ def test_node_list_window_set_nodes_updates_table(qapp):
     win = NodeListWindow([_make_node("N1", 37.40, 127.12)])
     win.set_nodes([_make_node("NX", 37.4, 127.1), _make_node("NY", 37.5, 127.2)])
     assert win.tbl.rowCount() == 2
+    
+    
+def test_gw_list_window_emits_load_excel_signal(qapp, tmp_path):
+    """엑셀 불러오기 버튼 -> QFileDialog를 거치는 부분은 실제 파일 다이얼로그라 자동테스트가
+    까다로우니, 시그널 자체가 존재하고 emit 가능한지만 확인함 (실제 클릭 흐름은 수동 확인)."""
+    win = GWListWindow([_make_gw("GW1", 37.40, 127.12)])
+    received = []
+    win.sig_load_excel_requested.connect(lambda path: received.append(path))
+    win.sig_load_excel_requested.emit("dummy.xlsx")
+    assert received == ["dummy.xlsx"]
+
+
+def test_node_list_window_emits_load_excel_signal(qapp):
+    win = NodeListWindow([_make_node("N1", 37.40, 127.12)])
+    received = []
+    win.sig_load_excel_requested.connect(lambda path: received.append(path))
+    win.sig_load_excel_requested.emit("dummy.xlsx")
+    assert received == ["dummy.xlsx"]

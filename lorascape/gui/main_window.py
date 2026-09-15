@@ -136,6 +136,12 @@ class MainWindow(QMainWindow):
 
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
 
+        # 목록창이 이미 열려있으면 같이 갱신함
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        if self._node_list_win is not None:
+            self._node_list_win.set_nodes(self.nodes)
+
     # ── 최적화 실행 ──────────────────────────────────────────
 
     def _on_optimize_clicked(self):
@@ -236,31 +242,36 @@ class MainWindow(QMainWindow):
         if self._gw_list_win is None:
             self._gw_list_win = GWListWindow(self.gateways, parent=self)
             self._gw_list_win.sig_gws_changed.connect(self._on_gws_changed_from_list)
+            self._gw_list_win.sig_load_excel_requested.connect(self._on_excel_load_requested)
         else:
             self._gw_list_win.set_gateways(self.gateways)
         return self._gw_list_win
-
-    def _open_gw_list(self):
-        if not self.gateways:
-            QMessageBox.information(self, "알림", "먼저 데이터를 불러와주세요.")
-            return
-        win = self._ensure_gw_list_win()
-        win.show()
-        win.raise_()
 
     def _ensure_node_list_win(self):
         from lorascape.gui.widgets.node_list_window import NodeListWindow
         if self._node_list_win is None:
             self._node_list_win = NodeListWindow(self.nodes, parent=self)
             self._node_list_win.sig_nodes_changed.connect(self._on_nodes_changed_from_list)
+            self._node_list_win.sig_load_excel_requested.connect(self._on_excel_load_requested)
         else:
             self._node_list_win.set_nodes(self.nodes)
         return self._node_list_win
 
+    def _on_excel_load_requested(self, path: str):
+        """
+        GW목록창 또는 단말목록창에서 '엑셀 불러오기'를 눌렀을 때 호출됨.
+        어느 창에서 눌렀든 GW/Node 둘 다 다시 로드하고, 지도와 두 목록창을 전부 갱신함
+        (한 엑셀에 GW/Node 시트가 같이 있으니, 하나만 갱신하면 서로 데이터가 어긋날 수 있어서).
+        """
+        self.xlsx_path = path
+        self._load_data()
+
+    def _open_gw_list(self):
+        win = self._ensure_gw_list_win()
+        win.show()
+        win.raise_()
+
     def _open_node_list(self):
-        if not self.nodes:
-            QMessageBox.information(self, "알림", "먼저 데이터를 불러와주세요.")
-            return
         win = self._ensure_node_list_win()
         win.show()
         win.raise_()
