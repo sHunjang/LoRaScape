@@ -91,17 +91,21 @@ def evaluate_connection(
     fc_mhz: float = 920.0,
     environment: str = "urban",
     max_path_loss_db: float = DEFAULT_MAX_PATH_LOSS_DB,
-    tx_power_dbm: float = 14.0,
-    gw_antenna_gain_dbi: float = 6.0,
-    gw_cable_loss_db: float = 1.0,
-    node_antenna_gain_dbi: float = 0.0,
-    node_cable_loss_db: float = 0.0,
+    tx_power_dbm: Optional[float] = None,
+    gw_antenna_gain_dbi: Optional[float] = None,
+    gw_cable_loss_db: Optional[float] = None,
+    node_antenna_gain_dbi: Optional[float] = None,
+    node_cable_loss_db: Optional[float] = None,
     bandwidth_hz: float = 125_000,
     receiver_noise_figure_db: float = 6.0,
 ) -> Optional[ConnectionResult]:
     """
     GW 하나와 Node 하나 사이 연결 가능 여부를 판정함.
-    Path Loss 제약(140dB) 넘거나, SNR이 SF12 임계값도 못 만족하면 연결 불가로 판정하고 None 반환함.
+
+    무선 파라미터(tx_power_dbm 등)를 None으로 두면 gw/node 객체에 저장된 값을 그대로 씀
+    (GUI에서 사용자가 개별 GW/Node의 파라미터를 고쳐두면 그 값이 자동으로 반영되는 구조).
+    호출부에서 명시적으로 값을 넘기면 그 값이 우선함 - 일회성 시뮬레이션(예: "이 GW 출력을
+    20dBm으로 올리면 어떻게 될까?" 같은 what-if 분석)에 쓸 수 있게 남겨둔 여지임.
     """
     pl = compute_total_path_loss(gw, node, dem, fc_mhz, environment)
 
@@ -109,8 +113,13 @@ def evaluate_connection(
         return None  # 문서 3번 제약조건: Path Loss <= 140dB
 
     pr = rx_power_dbm(
-        tx_power_dbm, gw_antenna_gain_dbi, gw_cable_loss_db,
-        pl, node_antenna_gain_dbi, node_cable_loss_db,
+        tx_power_dbm if tx_power_dbm is not None else gw.tx_power_dbm,
+        gw_antenna_gain_dbi if gw_antenna_gain_dbi is not None else gw.antenna_gain_dbi,
+        gw_cable_loss_db if gw_cable_loss_db is not None else gw.cable_loss_db,
+        pl,
+        node_antenna_gain_dbi if node_antenna_gain_dbi is not None else node.antenna_gain_dbi,
+        node_cable_loss_db if node_cable_loss_db is not None else node.cable_loss_db,
+        indoor_penetration_loss_db=node.indoor_loss_db,
     )
     snr = snr_db(pr, bandwidth_hz, receiver_noise_figure_db)
     sf = select_sf(snr)

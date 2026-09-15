@@ -125,3 +125,51 @@ def test_optimize_gw_placement_reaches_max_k_without_meeting_target():
 def test_optimize_gw_placement_raises_on_empty_nodes():
     with pytest.raises(ValueError):
         optimize_gw_placement([], FakeFlatDem())
+        
+
+def test_evaluate_connection_uses_gw_node_entity_params_by_default():
+    """무선 파라미터를 명시적으로 안 넘기면 gw/node 객체에 저장된 기본값을 써야 함."""
+    gw = _make_gw("GW1", 37.40, 127.12)
+    node = _make_node("N1", 37.4009, 127.12)
+    dem = FakeFlatDem()
+
+    # 기본값(14dBm, 6dBi, 1dB / 0dBi, 0dB)으로 계산한 결과와
+    result_default = evaluate_connection(gw, node, dem)
+
+    # 명시적으로 같은 값을 넘긴 결과와 동일해야 함
+    result_explicit = evaluate_connection(
+        gw, node, dem,
+        tx_power_dbm=14.0, gw_antenna_gain_dbi=6.0, gw_cable_loss_db=1.0,
+        node_antenna_gain_dbi=0.0, node_cable_loss_db=0.0,
+    )
+
+    assert result_default.rx_power_dbm == pytest.approx(result_explicit.rx_power_dbm)
+
+
+def test_evaluate_connection_respects_gw_custom_tx_power():
+    """GW 객체의 tx_power_dbm을 GUI에서 고친 것처럼 바꾸면 결과에 반영돼야 함."""
+    gw_weak = _make_gw("GW_WEAK", 37.40, 127.12)
+    gw_weak.tx_power_dbm = 5.0  # GUI에서 출력을 낮춘 상황을 흉내 냄
+
+    gw_strong = _make_gw("GW_STRONG", 37.40, 127.12)
+    gw_strong.tx_power_dbm = 20.0  # GUI에서 출력을 높인 상황
+
+    node = _make_node("N1", 37.4009, 127.12)
+    dem = FakeFlatDem()
+
+    result_weak = evaluate_connection(gw_weak, node, dem)
+    result_strong = evaluate_connection(gw_strong, node, dem)
+
+    assert result_strong.rx_power_dbm > result_weak.rx_power_dbm
+
+
+def test_evaluate_connection_explicit_override_wins_over_entity():
+    """호출부에서 명시적으로 값을 넘기면 엔티티 필드보다 우선해야 함 (what-if 분석용)."""
+    gw = _make_gw("GW1", 37.40, 127.12)
+    node = _make_node("N1", 37.4009, 127.12)
+    dem = FakeFlatDem()
+
+    result_normal = evaluate_connection(gw, node, dem)
+    result_boosted = evaluate_connection(gw, node, dem, tx_power_dbm=30.0)
+
+    assert result_boosted.rx_power_dbm > result_normal.rx_power_dbm
