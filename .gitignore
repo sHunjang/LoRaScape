@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+*.spec
+.pytest_cache/
+*.log
+license.key
+
+# GIS 원본 데이터 (용량 큰 파일은 git에 커밋하지 않음)
+sample_data/**/*.img
+sample_data/**/*.img.aux.xml
+sample_data/**/*.shp
+sample_data/**/*.shx
+sample_data/**/*.dbf
+sample_data/**/*.prj
+sample_data/**/*.cpg
+sample_data/**/*.qmd
+
+.vscode/
+.idea/
