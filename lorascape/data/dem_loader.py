@@ -15,36 +15,43 @@ class DemLoader:
     """
     DEM 파일 하나를 감싸는 클래스임. 파일을 매번 열고 닫는 게 아니라
     한 번 열어두고 여러 번 좌표 조회하는 구조로 만듦 (성능 때문 - I/O 반복 줄이려고).
+
+    ★ 성능 수정: 예전엔 get_elevation()이 호출될 때마다 self.dataset.read(1)로
+    DEM 전체 밴드를 디스크에서 매번 다시 읽었음. 지형 프로파일 하나 뽑는 데만
+    (20샘플) DEM 전체를 20번 읽는 꼴이었고, GW-Node 조합이 수백~수천 개면
+    이게 그대로 곱해져서 심각한 병목이었음.
+    지금은 __init__ 시점에 밴드 전체를 딱 한 번 numpy 배열로 캐싱해두고,
+    이후 조회는 전부 메모리 인덱싱만 함.
     """
 
     def __init__(self, dem_path: str):
         self.dem_path = dem_path
         self.dataset = rasterio.open(dem_path)
-        # DEM 파일의 좌표계(CRS)임. 성남시 DEM이라 EPSG:5186이나 EPSG:3857 등일 수 있는데
-        # 실제로 뭔지는 파일 열어봐야 알 수 있어서 여기서 저장해둠.
         self.crs = self.dataset.crs
+
+        # ★ 캐싱: 여기서 딱 한 번만 전체 밴드를 메모리에 올림.
+        # DEM이 아주 크면(수 GB) 이것도 부담일 수 있는데, 지금 성남시 DEM은
+        # 수십MB 수준이라 문제없음. 더 큰 DEM을 쓸 경우엔 필요한 영역만
+        # 캐싱하는 방식(타일 캐시)으로 확장이 필요할 수 있음 - 지금은 오버엔지니어링이라 안 함.
+        self._band = self.dataset.read(1)
+        self._nodata = self.dataset.nodata
 
     def get_elevation(self, lat: float, lon: float) -> float:
         """
         위경도(WGS84) 좌표 하나 받아서 그 지점의 고도값(m)을 반환함.
-        DEM 파일 좌표계가 WGS84가 아닐 수 있어서, 먼저 DEM 좌표계로 변환하고 나서 픽셀 조회함.
+        캐싱된 배열(self._band)에서 인덱싱만 하니까 디스크 I/O가 전혀 없음.
         """
-        # WGS84 위경도 -> DEM 파일의 좌표계로 변환
         xs, ys = rio_transform("EPSG:4326", self.crs, [lon], [lat])
         x, y = xs[0], ys[0]
 
-        # 좌표를 픽셀(행,열) 인덱스로 변환해서 값 읽어옴
         row, col = self.dataset.index(x, y)
-        band1 = self.dataset.read(1)
 
-        if row < 0 or row >= band1.shape[0] or col < 0 or col >= band1.shape[1]:
-            # DEM 범위 밖 좌표면 None 반환 (에러 대신 - 호출부에서 "데이터 없음"으로 처리하게)
+        if row < 0 or row >= self._band.shape[0] or col < 0 or col >= self._band.shape[1]:
             return None
 
-        value = band1[row, col]
+        value = self._band[row, col]
 
-        # nodata 처리: DEM에 구멍(데이터 없는 픽셀)이 있을 수 있음
-        if self.dataset.nodata is not None and value == self.dataset.nodata:
+        if self._nodata is not None and value == self._nodata:
             return None
 
         return float(value)

@@ -173,3 +173,44 @@ def test_evaluate_connection_explicit_override_wins_over_entity():
     result_boosted = evaluate_connection(gw, node, dem, tx_power_dbm=30.0)
 
     assert result_boosted.rx_power_dbm > result_normal.rx_power_dbm
+    
+
+def test_link_matrix_computed_exactly_once_per_pair():
+    """
+    핵심 성능 보증 테스트임: DEM 조회(get_elevation_profile 호출)가
+    '후보 수 x Node 수'만큼만 일어나야 하고, K를 여러 번 시도한다고 곱절로 늘어나면 안 됨.
+    """
+    call_count = {"n": 0}
+
+    class CountingDem(FakeFlatDem):
+        def get_elevation_profile(self, *args, **kwargs):
+            call_count["n"] += 1
+            return super().get_elevation_profile(*args, **kwargs)
+
+    nodes = [
+        _make_node("N1", 37.20, 127.12),
+        _make_node("N2", 38.00, 127.12),
+        _make_node("N3", 37.60, 127.30),
+    ]
+    dem = CountingDem()
+
+    result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=5, coverage_target=1.0)
+
+    pool_size = min(5, len(nodes))  # optimize_gw_placement 내부와 동일한 pool_size 계산
+    expected_calls = pool_size * len(nodes)
+    assert call_count["n"] == expected_calls
+
+
+def test_greedy_select_picks_minimum_gws_for_full_coverage():
+    """모여있는 Node들은 GW 1개로 충분해야 하고, 탐욕 선택도 그렇게 골라야 함."""
+    nodes = [
+        _make_node("N1", 37.4000, 127.1200),
+        _make_node("N2", 37.4001, 127.1201),
+        _make_node("N3", 37.4002, 127.1199),
+    ]
+    dem = FakeFlatDem()
+
+    result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=5, coverage_target=1.0)
+
+    assert result.k == 1
+    assert result.target_met is True

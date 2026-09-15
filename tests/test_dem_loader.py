@@ -39,3 +39,28 @@ def test_elevation_profile_between_two_points():
         # 거리는 0부터 시작해서 끝까지 단조증가해야 함
         distances = [d for d, _ in profile]
         assert distances == sorted(distances)
+        
+
+def test_get_elevation_does_not_reread_dataset_after_init():
+    """
+    캐싱이 실제로 되고 있는지 확인하는 테스트임.
+    dataset.read를 감시해서, __init__ 이후 get_elevation을 여러 번 불러도
+    dataset.read가 추가로 호출되지 않아야 함 (캐싱 안 되면 매번 호출될 것).
+    """
+    if not DEM_EXISTS:
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    with DemLoader(DEM_PATH) as dem:
+        original_read = dem.dataset.read
+        call_count = {"n": 0}
+
+        def counting_read(*args, **kwargs):
+            call_count["n"] += 1
+            return original_read(*args, **kwargs)
+
+        dem.dataset.read = counting_read
+
+        for _ in range(10):
+            dem.get_elevation(37.4201, 127.1265)
+
+        assert call_count["n"] == 0  # __init__ 이후로는 read가 한 번도 더 호출되면 안 됨
