@@ -43,6 +43,9 @@ class MainWindow(QMainWindow):
         self.xlsx_path = xlsx_path
         self.dem_path = dem_path
 
+        self._gw_list_win = None
+        self._node_list_win = None
+
         self.gateways: list = []
         self.nodes: list = []
         self.last_result = None
@@ -61,6 +64,13 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setStyleSheet(TOOLBAR_STYLE)
         self.addToolBar(Qt.TopToolBarArea, tb)
+
+        act_gw_list = QAction("GW 목록", self)
+        act_node_list = QAction("단말 목록", self)
+        act_gw_list.triggered.connect(self._open_gw_list)
+        act_node_list.triggered.connect(self._open_node_list)
+        tb.addAction(act_gw_list)
+        tb.addAction(act_node_list)
 
         act_load = QAction("데이터 불러오기", self)
         act_optimize = QAction("GW 배치 검증 및 보강", self)
@@ -217,3 +227,47 @@ class MainWindow(QMainWindow):
 
     def _on_node_dragged(self, node_id, lon, lat):
         self.status_label.setText(f"{node_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
+        
+
+    # ── 목록 창 ──────────────────────────────────────────────
+
+    def _ensure_gw_list_win(self):
+        from lorascape.gui.widgets.gw_list_window import GWListWindow
+        if self._gw_list_win is None:
+            self._gw_list_win = GWListWindow(self.gateways, parent=self)
+            self._gw_list_win.sig_gws_changed.connect(self._on_gws_changed_from_list)
+        else:
+            self._gw_list_win.set_gateways(self.gateways)
+        return self._gw_list_win
+
+    def _open_gw_list(self):
+        if not self.gateways:
+            QMessageBox.information(self, "알림", "먼저 데이터를 불러와주세요.")
+            return
+        win = self._ensure_gw_list_win()
+        win.show()
+        win.raise_()
+
+    def _ensure_node_list_win(self):
+        from lorascape.gui.widgets.node_list_window import NodeListWindow
+        if self._node_list_win is None:
+            self._node_list_win = NodeListWindow(self.nodes, parent=self)
+            self._node_list_win.sig_nodes_changed.connect(self._on_nodes_changed_from_list)
+        else:
+            self._node_list_win.set_nodes(self.nodes)
+        return self._node_list_win
+
+    def _open_node_list(self):
+        if not self.nodes:
+            QMessageBox.information(self, "알림", "먼저 데이터를 불러와주세요.")
+            return
+        win = self._ensure_node_list_win()
+        win.show()
+        win.raise_()
+
+    def _on_gws_changed_from_list(self):
+        """GW 목록창에서 파라미터가 편집되면 지도를 다시 그려서 반영함."""
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+
+    def _on_nodes_changed_from_list(self):
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
