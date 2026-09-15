@@ -18,6 +18,10 @@ sample_data/**/*.dbf
 sample_data/**/*.prj
 sample_data/**/*.cpg
 sample_data/**/*.qmd
+# 고객사 실측 데이터 (엑셀) - 절대 커밋 금지
+sample_data/**/*.xlsx
+sample_data/**/*.xls
+
 
 .vscode/
 .idea/
