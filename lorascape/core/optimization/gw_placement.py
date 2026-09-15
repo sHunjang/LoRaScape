@@ -267,3 +267,122 @@ def optimize_gw_placement(
         coverage_ratio=coverage_ratio, k=len(chosen),
         target_met=coverage_ratio >= coverage_target,
     )
+    
+
+def _connections_from_chosen(chosen: list[GatewaySite], nodes: list[NodeSite], matrix: dict) -> tuple[dict, dict, float]:
+    """
+    선택된 GW 집합(chosen)과 매트릭스가 주어졌을 때, 각 Node의 최적 연결을 뽑아내는 공용 함수임.
+    _greedy_select 끝부분에서 하던 걸 여기로 빼서, evaluate_and_augment에서도 재사용함
+    (같은 로직을 두 군데서 따로 짜면 나중에 한쪽만 고치는 실수가 나기 쉬워서 공용화함).
+    """
+    connections = {}
+    node_gw_ids: dict[str, list[str]] = {}
+    connected_count = 0
+
+    for node in nodes:
+        best_conn: Optional[ConnectionResult] = None
+        receiving_gw_ids: list[str] = []
+        for gw in chosen:
+            conn = matrix.get(gw.gw_id, {}).get(node.node_id)
+            if conn is None:
+                continue
+            receiving_gw_ids.append(gw.gw_id)
+            if best_conn is None or conn.path_loss_db < best_conn.path_loss_db:
+                best_conn = conn
+        connections[node.node_id] = best_conn
+        node_gw_ids[node.node_id] = receiving_gw_ids
+        if best_conn is not None:
+            connected_count += 1
+
+    coverage_ratio = connected_count / len(nodes) if nodes else 0.0
+    return connections, node_gw_ids, coverage_ratio
+
+
+def evaluate_and_augment(
+    nodes: list[NodeSite],
+    existing_gateways: list[GatewaySite],
+    dem,
+    max_additional: int = 15,
+    coverage_target: float = 0.95,
+    fc_mhz: float = 920.0,
+    environment: str = "urban",
+    max_path_loss_db: float = DEFAULT_MAX_PATH_LOSS_DB,
+    candidate_pool_multiplier: int = 3,
+    **link_kwargs,
+) -> OptimizationResult:
+    """
+    문서 요청사항 2번+3번을 합친 함수임:
+      1) 기존에 이미 설치된 GW(existing_gateways)들로 커버리지를 먼저 계산함 - 검증 단계.
+      2) 목표 커버리지(coverage_target) 이미 달성했으면 그대로 반환함 (추가 배치 없음
+         -> 이게 순수 "검증" 케이스, 2번 요구사항).
+      3) 미달이면, 미커버 Node들 위치 기준으로 K-means 후보를 새로 뽑아서, 부족한 만큼만
+         탐욕 선택으로 추가 GW를 골라 기존 GW 목록에 더함 (기존 GW는 절대 빼거나 옮기지 않음
+         -> 3번 요구사항인 "기존은 고정, 부족한 곳만 증설").
+
+    기존 GW들은 위치/개수가 그대로 유지된다는 게 핵심 - K-means/탐욕선택은 오직
+    "추가로 놓을 위치"를 찾는 데만 쓰임.
+    """
+    if not nodes:
+        raise ValueError("nodes가 비어있음 - 평가할 대상이 없음")
+
+    # 1) 기존 GW로 커버리지 검증
+    existing_matrix = _compute_link_matrix(
+        existing_gateways, nodes, dem, fc_mhz, environment, max_path_loss_db, **link_kwargs
+    )
+    connections, node_gw_ids, coverage_ratio = _connections_from_chosen(existing_gateways, nodes, existing_matrix)
+
+    if coverage_ratio >= coverage_target or max_additional <= 0:
+        # 이미 목표 달성 -> 추가 배치 없이 검증 결과만 반환함 (2번 케이스)
+        return OptimizationResult(
+            gateways=list(existing_gateways), connections=connections, node_gw_ids=node_gw_ids,
+            coverage_ratio=coverage_ratio, k=len(existing_gateways),
+            target_met=coverage_ratio >= coverage_target,
+        )
+
+    # 2) 미커버 Node 위치 기준으로 추가 후보 풀 생성
+    uncovered_nodes = [n for n in nodes if connections.get(n.node_id) is None]
+    coords = np.array([latlon_to_xy(n.lat, n.lon) for n in uncovered_nodes])
+    pool_size = max(1, min(max_additional * candidate_pool_multiplier, len(uncovered_nodes)))
+    candidates = _build_candidate_pool(uncovered_nodes, coords, pool_size, dem)
+
+    # 3) 후보들과 전체 Node 사이 매트릭스 계산 (전체로 계산하는 이유: 추가 GW가
+    #    이미 커버된 Node의 신호품질/다이버시티도 개선할 수 있어서, node_gw_ids 집계에 반영되게 함)
+    add_matrix = _compute_link_matrix(candidates, nodes, dem, fc_mhz, environment, max_path_loss_db, **link_kwargs)
+
+    # 4) 탐욕 선택 - 아직 안 커버된 Node만 기준으로 추가 GW를 골라나감
+    remaining_uncovered = {nid for nid, c in connections.items() if c is None}
+    remaining_candidates = list(candidates)
+    chosen_additional: list[GatewaySite] = []
+
+    while remaining_candidates and len(chosen_additional) < max_additional and remaining_uncovered:
+        best_gw = None
+        best_newly_covered: set = set()
+
+        for gw in remaining_candidates:
+            newly_covered = {nid for nid in remaining_uncovered if add_matrix[gw.gw_id].get(nid) is not None}
+            if len(newly_covered) > len(best_newly_covered):
+                best_gw = gw
+                best_newly_covered = newly_covered
+
+        if best_gw is None or not best_newly_covered:
+            break  # 남은 후보 어느 것도 미커버 Node를 더 커버 못 함
+
+        chosen_additional.append(best_gw)
+        remaining_candidates.remove(best_gw)
+        remaining_uncovered -= best_newly_covered
+
+        covered_count = len(nodes) - len(remaining_uncovered)
+        if covered_count / len(nodes) >= coverage_target:
+            break
+
+    # 5) 기존 GW + 추가 GW를 합쳐서 최종 연결/커버리지 재계산
+    final_gateways = list(existing_gateways) + chosen_additional
+    combined_matrix = dict(existing_matrix)
+    combined_matrix.update(add_matrix)
+    connections, node_gw_ids, coverage_ratio = _connections_from_chosen(final_gateways, nodes, combined_matrix)
+
+    return OptimizationResult(
+        gateways=final_gateways, connections=connections, node_gw_ids=node_gw_ids,
+        coverage_ratio=coverage_ratio, k=len(final_gateways),
+        target_met=coverage_ratio >= coverage_target,
+    )

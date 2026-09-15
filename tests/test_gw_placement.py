@@ -10,6 +10,7 @@ from lorascape.core.optimization.gw_placement import (
     optimize_gw_placement,
     evaluate_connection,
     compute_total_path_loss,
+    evaluate_and_augment,
 )
 
 
@@ -233,3 +234,39 @@ def test_node_gw_ids_includes_all_receiving_chosen_gws():
     result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=3, coverage_target=1.0)
     assert "N1" in result.node_gw_ids
     assert isinstance(result.node_gw_ids["N1"], list)
+    
+
+def test_evaluate_and_augment_returns_existing_only_when_target_already_met():
+    """기존 GW만으로 목표 커버리지를 이미 채우면 추가 GW 없이 그대로 반환해야 함 (2번 케이스)."""
+    existing = [_make_gw("EXISTING_1", 37.4000, 127.1200)]
+    nodes = [
+        _make_node("N1", 37.4001, 127.1201),
+        _make_node("N2", 37.4002, 127.1199),
+    ]
+    dem = FakeFlatDem()
+
+    result = evaluate_and_augment(nodes, existing, dem, max_additional=5, coverage_target=0.9)
+
+    assert result.k == 1  # 추가 GW 없음
+    assert result.gateways == existing
+    assert result.target_met is True
+
+
+def test_evaluate_and_augment_adds_gws_when_existing_insufficient():
+    """기존 GW로 부족하면 추가 GW가 늘어나야 함 (3번 케이스) - 기존 GW는 그대로 유지되어야 함."""
+    existing = [_make_gw("EXISTING_1", 37.20, 127.12)]  # 멀리 떨어진 Node는 못 커버할 위치
+    nodes = [
+        _make_node("N1", 37.201, 127.121),   # existing 근처 - 커버됨
+        _make_node("N2", 38.00, 127.12),     # existing과 매우 멀리 떨어짐 - 미커버 예상
+    ]
+    dem = FakeFlatDem()
+
+    result = evaluate_and_augment(nodes, existing, dem, max_additional=5, coverage_target=1.0)
+
+    assert result.k > 1  # 추가 GW가 붙었어야 함
+    assert any(gw.gw_id == "EXISTING_1" for gw in result.gateways)  # 기존 GW는 그대로 유지됨
+
+
+def test_evaluate_and_augment_raises_on_empty_nodes():
+    with pytest.raises(ValueError):
+        evaluate_and_augment([], [_make_gw("G1", 37.4, 127.1)], FakeFlatDem())
