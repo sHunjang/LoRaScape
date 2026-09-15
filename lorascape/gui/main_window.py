@@ -1,17 +1,11 @@
 # lorascape/gui/main_window.py
 """
-메인 윈도우임. 원본 참고 파일(main_window.py)의 구조(툴바 + QSplitter(지도/결과패널) +
-상태바)를 그대로 따르되, core.coverage.CoverageEngine 같은 대신 우리가 만든
-lorascape.core.optimization.gw_placement / lorascape.data.* 를 직접 씀.
-
-★ 지금은 1차 버전임 - '데이터 불러오기'와 'GW 최적 배치 실행' 두 가지 핵심 동작만
-동작하게 만들고, GW목록/Node목록/설정/리포트 등 나머지 툴바 버튼들은
-해당 창을 포팅하는 대로 하나씩 추가해나갈 예정임 (지금 안 넣은 이유는
-동작 안 하는 버튼을 미리 만들어두는 것보다, 만들 때마다 바로 연결하는 게
-"눌러보니 안 됨" 상태를 안 만드는 방법이라서).
+메인 윈도우임. 툴바 + QSplitter(지도/결과패널) + 상태바 구조.
+core.optimization.gw_placement / data.* 를 직접 씀 (별도 어댑터 레이어 없음).
 """
 from PyQt5.QtWidgets import (
-    QMainWindow, QToolBar, QAction, QSplitter, QStatusBar, QLabel, QFileDialog, QMessageBox,
+    QMainWindow, QToolBar, QAction, QSplitter, QStatusBar, QLabel,
+    QFileDialog, QMessageBox,
 )
 from PyQt5.QtCore import Qt, QThread
 
@@ -30,6 +24,27 @@ QToolButton {{ color:{TEXT}; background:#253a5a; border:1px solid #3a5a8a; borde
 QToolButton:hover {{ background:#2e4a7a; }}
 """
 
+# ★ QMessageBox는 기본적으로 앱 스타일시트를 상속 안 받아서, 텍스트 색만 밝은 색이
+# 적용되고 배경은 시스템 기본(밝은 색)이라 글자가 안 보이는 문제가 있었음.
+# 그래서 QMessageBox를 쓸 때마다 이 스타일을 명시적으로 적용해야 함.
+MESSAGEBOX_STYLE = f"""
+QMessageBox {{ background:{DARK}; }}
+QMessageBox QLabel {{ color:{TEXT}; font-size:12px; }}
+QMessageBox QPushButton {{
+    background:#253a5a; color:{TEXT};
+    border:1px solid #3a5a8a; border-radius:5px;
+    padding:6px 18px; font-size:12px; min-width:60px;
+}}
+QMessageBox QPushButton:hover {{ background:#2e4a7a; }}
+"""
+
+
+def _styled_message_box(parent, icon, title, text) -> QMessageBox:
+    """다크 스타일이 적용된 QMessageBox를 만들어서 반환함. 호출부는 .exec_()만 부르면 됨."""
+    box = QMessageBox(icon, title, text, QMessageBox.Ok, parent)
+    box.setStyleSheet(MESSAGEBOX_STYLE)
+    return box
+
 
 class MainWindow(QMainWindow):
     def __init__(self, xlsx_path: str = None, dem_path: str = None):
@@ -38,26 +53,27 @@ class MainWindow(QMainWindow):
         self.resize(1400, 900)
         self.setStyleSheet(f"background:{DARK};")
 
-        # 초기 데이터 경로임 - 지금은 생성자 인자로 받지만, 나중에 초기설정창(Shapefile/DEM
-        # 선택창)이 생기면 그쪽에서 값을 받아오는 구조로 바뀔 예정임.
         self.xlsx_path = xlsx_path
         self.dem_path = dem_path
-
-        self._gw_list_win = None
-        self._node_list_win = None
 
         self.gateways: list = []
         self.nodes: list = []
         self.last_result = None
 
+        self._gw_list_win = None
+        self._node_list_win = None
+
         self._thread: QThread | None = None
         self._worker = None
-        self._thread_active = False
+        self._thread_active = False  # QThread deleteLater 이후에도 안전하게 실행중 여부를 판단하는 플래그
 
         self._build_ui()
 
         if self.xlsx_path:
-            self._load_data()
+            # ★ 앱 시작 시점의 자동 로딩은 "사용자가 직접 요청한 조작"이 아니라
+            # "이전 세션에서 기억해둔 값을 다시 시도해보는 것"이라, 실패해도
+            # 팝업으로 방해하지 않고 상태바에만 조용히 표시함.
+            self._load_data(silent=True)
 
     def _build_ui(self):
         tb = QToolBar()
@@ -67,18 +83,14 @@ class MainWindow(QMainWindow):
 
         act_gw_list = QAction("GW 목록", self)
         act_node_list = QAction("단말 목록", self)
-        act_gw_list.triggered.connect(self._open_gw_list)
-        act_node_list.triggered.connect(self._open_node_list)
-        tb.addAction(act_gw_list)
-        tb.addAction(act_node_list)
-
-        act_load = QAction("데이터 불러오기", self)
         act_optimize = QAction("GW 배치 검증 및 보강", self)
 
-        act_load.triggered.connect(self._on_load_clicked)
+        act_gw_list.triggered.connect(self._open_gw_list)
+        act_node_list.triggered.connect(self._open_node_list)
         act_optimize.triggered.connect(self._on_optimize_clicked)
 
-        tb.addAction(act_load)
+        tb.addAction(act_gw_list)
+        tb.addAction(act_node_list)
         tb.addAction(act_optimize)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -105,26 +117,66 @@ class MainWindow(QMainWindow):
         self.map_widget.sig_gw_dragged.connect(self._on_gw_dragged)
         self.map_widget.sig_nd_dragged.connect(self._on_node_dragged)
 
+    # ── 목록 창 ──────────────────────────────────────────────
+
+    def _ensure_gw_list_win(self):
+        from lorascape.gui.widgets.gw_list_window import GWListWindow
+        if self._gw_list_win is None:
+            self._gw_list_win = GWListWindow(self.gateways, parent=self)
+            self._gw_list_win.sig_gws_changed.connect(self._on_gws_changed_from_list)
+            self._gw_list_win.sig_load_excel_requested.connect(
+                lambda path: self._on_excel_load_requested(path, target="gw")
+            )
+        else:
+            self._gw_list_win.set_gateways(self.gateways)
+        return self._gw_list_win
+
+    def _open_gw_list(self):
+        win = self._ensure_gw_list_win()
+        win.show()
+        win.raise_()
+
+    def _ensure_node_list_win(self):
+        from lorascape.gui.widgets.node_list_window import NodeListWindow
+        if self._node_list_win is None:
+            self._node_list_win = NodeListWindow(self.nodes, parent=self)
+            self._node_list_win.sig_nodes_changed.connect(self._on_nodes_changed_from_list)
+            self._node_list_win.sig_load_excel_requested.connect(
+                lambda path: self._on_excel_load_requested(path, target="node")
+            )
+        else:
+            self._node_list_win.set_nodes(self.nodes)
+        return self._node_list_win
+
+    def _open_node_list(self):
+        win = self._ensure_node_list_win()
+        win.show()
+        win.raise_()
+
+    def _on_gws_changed_from_list(self):
+        """GW 목록창에서 파라미터가 편집되면 지도를 다시 그려서 반영함."""
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+
+    def _on_nodes_changed_from_list(self):
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+
     # ── 데이터 로딩 ──────────────────────────────────────────
 
-    def _on_load_clicked(self):
-        path, _ = QFileDialog.getOpenFileName(self, "엑셀 인벤토리 선택", "", "Excel Files (*.xlsx)")
-        if not path:
-            return
-        self.xlsx_path = path
-        self._load_data()
-
-    def _load_data(self):
+    def _load_data(self, silent: bool = False):
         """초기 로딩(생성자에서 xlsx_path 받았을 때)임 - GW/Node 둘 다 읽음."""
         self.status_label.setText("데이터 로딩 중...")
         worker = LoadDataWorker(self.xlsx_path, load_gateways=True, load_nodes=True)
-        self._start_worker(worker, lambda gws, nds: self._on_data_loaded(gws, nds, target="both"))
+        error_slot = self._on_data_load_error_silent if silent else self._on_data_load_error
+        self._start_worker(
+            worker,
+            lambda gws, nds: self._on_data_loaded(gws, nds, target="both"),
+            error_slot=error_slot,
+        )
 
     def _on_excel_load_requested(self, path: str, target: str):
         """
         GW목록창 또는 단말목록창에서 '엑셀 불러오기'를 눌렀을 때 호출됨.
-        target='gw'면 GW만, target='node'면 Node만 읽어서 해당 목록/지도만 갱신함
-        (요청하신 대로 두 목록이 서로 다른 엑셀 파일을 각자 독립적으로 쓸 수 있게 하려고).
+        target='gw'면 GW만, target='node'면 Node만 읽어서 해당 목록/지도만 갱신함.
         """
         self.status_label.setText("데이터 로딩 중...")
         worker = LoadDataWorker(
@@ -132,12 +184,15 @@ class MainWindow(QMainWindow):
             load_gateways=(target in ("gw", "both")),
             load_nodes=(target in ("node", "both")),
         )
-        self._start_worker(worker, lambda gws, nds: self._on_data_loaded(gws, nds, target=target))
+        self._start_worker(
+            worker,
+            lambda gws, nds: self._on_data_loaded(gws, nds, target=target),
+            error_slot=self._on_data_load_error,
+        )
 
     def _on_data_loaded(self, gateways, nodes, target: str):
         """
         gateways/nodes 중 로드 안 한 쪽은 None으로 들어옴 - 그 경우 기존 값을 그대로 유지함.
-        target은 로그 메시지 용도로만 씀 (실제 갱신 범위는 gateways/nodes가 None인지로 판단).
         """
         if gateways is not None:
             self.gateways = gateways
@@ -164,23 +219,35 @@ class MainWindow(QMainWindow):
 
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
 
-        # 갱신된 쪽의 목록창만 새로고침함 (안 바뀐 쪽은 그대로 둠)
         if gateways is not None and self._gw_list_win is not None:
             self._gw_list_win.set_gateways(self.gateways)
         if nodes is not None and self._node_list_win is not None:
             self._node_list_win.set_nodes(self.nodes)
 
+    def _on_data_load_error(self, message: str):
+        """
+        사용자가 직접 요청한 로딩(목록창 버튼)이 실패했을 때 팝업으로 원인을 그대로 보여줌.
+        site_inventory.py가 "필요한 시트: ... / 이 파일의 시트 목록: ..." 형태로
+        구체적인 메시지를 만들어주니, 그걸 그대로 띄우면 사용자가 스스로 원인을 파악할 수 있음.
+        """
+        self.status_label.setText("데이터 로딩 실패")
+        _styled_message_box(self, QMessageBox.Warning, "엑셀 로딩 실패", message).exec_()
+
+    def _on_data_load_error_silent(self, message: str):
+        """앱 시작 시 자동 로딩 실패는 팝업 없이 상태바에만 남김 (사용자 조작 결과가 아니라서)."""
+        self.status_label.setText("이전 데이터 자동 로딩 실패 — GW/단말 목록에서 다시 불러와주세요")
+
     # ── 최적화 실행 ──────────────────────────────────────────
 
     def _on_optimize_clicked(self):
         if not self.nodes:
-            QMessageBox.warning(self, "알림", "먼저 데이터를 불러와주세요.")
+            _styled_message_box(self, QMessageBox.Warning, "알림", "먼저 데이터를 불러와주세요.").exec_()
             return
         if not self.dem_path:
-            QMessageBox.warning(self, "알림", "DEM 파일 경로가 설정되지 않았습니다.")
+            _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
             return
         if not self.gateways:
-            QMessageBox.warning(self, "알림", "기존 GW 목록이 없습니다. 데이터를 먼저 불러와주세요.")
+            _styled_message_box(self, QMessageBox.Warning, "알림", "기존 GW 목록이 없습니다. 데이터를 먼저 불러와주세요.").exec_()
             return
 
         self.map_widget.show_loading("기존 GW 커버리지 검증 중...")
@@ -206,19 +273,21 @@ class MainWindow(QMainWindow):
         self.map_widget.hide_loading()
         self.result_panel.show_error(message)
         self.status_label.setText("최적화 실패")
-        QMessageBox.critical(self, "오류", f"최적화 중 오류가 발생했습니다:\n{message}")
+        _styled_message_box(
+            self, QMessageBox.Critical, "오류", f"최적화 중 오류가 발생했습니다:\n{message}"
+        ).exec_()
 
     # ── 워커 스레드 관리 ─────────────────────────────────────
 
     def _start_worker(self, worker, finished_slot, error_slot=None):
         """
         워커를 QThread로 옮겨서 실행함.
+        직전 워커/스레드가 아직 안 끝났으면 새로 시작 안 하고 조용히 무시함
+        (동시에 여러 계산이 겹치면 결과가 꼬일 수 있어서 - 지금은 단순 방어).
 
-        ★ 버그 수정: 예전엔 self._thread.isRunning()으로 실행 중 여부를 판단했는데,
-        워커가 끝나면 thread.deleteLater()로 C++ 객체가 실제 삭제되어버려서
-        다음 호출 때 삭제된 객체에 접근하다가 RuntimeError가 났음.
-        이제는 단순 bool 플래그(self._thread_active)로 관리함 - Qt 객체 생존 여부에
-        의존하지 않아서 안전함.
+        self._thread_active 플래그로 실행중 여부를 판단함 - Qt 객체(QThread)의
+        deleteLater() 이후 생존 여부에 의존하면 "wrapped C/C++ object has been
+        deleted" 에러가 나서, 순수 파이썬 bool로 관리함.
         """
         if self._thread_active:
             self.status_label.setText("이전 작업이 아직 진행 중입니다.")
@@ -254,54 +323,9 @@ class MainWindow(QMainWindow):
     def _on_gw_dragged(self, gw_id, lon, lat):
         """
         GW를 드래그해서 위치를 옮겼을 때임. 지금은 로그만 남기고, 실제로
-        gateways 리스트의 좌표를 갱신하는 로직은 GW목록창 포팅할 때 같이 붙일 예정임
-        (지금 섣불리 좌표만 바꾸면, 최적화 결과와 실제 표시가 어긋날 수 있어서).
+        gateways 리스트의 좌표를 갱신하는 로직은 다음 단계에서 붙일 예정임.
         """
         self.status_label.setText(f"{gw_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
 
     def _on_node_dragged(self, node_id, lon, lat):
         self.status_label.setText(f"{node_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
-        
-
-    # ── 목록 창 ──────────────────────────────────────────────
-
-    def _ensure_gw_list_win(self):
-        from lorascape.gui.widgets.gw_list_window import GWListWindow
-        if self._gw_list_win is None:
-            self._gw_list_win = GWListWindow(self.gateways, parent=self)
-            self._gw_list_win.sig_gws_changed.connect(self._on_gws_changed_from_list)
-            self._gw_list_win.sig_load_excel_requested.connect(
-                lambda path: self._on_excel_load_requested(path, target="gw")
-            )
-        else:
-            self._gw_list_win.set_gateways(self.gateways)
-        return self._gw_list_win
-
-    def _ensure_node_list_win(self):
-        from lorascape.gui.widgets.node_list_window import NodeListWindow
-        if self._node_list_win is None:
-            self._node_list_win = NodeListWindow(self.nodes, parent=self)
-            self._node_list_win.sig_nodes_changed.connect(self._on_nodes_changed_from_list)
-            self._node_list_win.sig_load_excel_requested.connect(
-                lambda path: self._on_excel_load_requested(path, target="node")
-            )
-        else:
-            self._node_list_win.set_nodes(self.nodes)
-        return self._node_list_win
-
-    def _open_gw_list(self):
-        win = self._ensure_gw_list_win()
-        win.show()
-        win.raise_()
-
-    def _open_node_list(self):
-        win = self._ensure_node_list_win()
-        win.show()
-        win.raise_()
-
-    def _on_gws_changed_from_list(self):
-        """GW 목록창에서 파라미터가 편집되면 지도를 다시 그려서 반영함."""
-        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
-
-    def _on_nodes_changed_from_list(self):
-        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
