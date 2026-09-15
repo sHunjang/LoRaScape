@@ -214,3 +214,22 @@ def test_greedy_select_picks_minimum_gws_for_full_coverage():
 
     assert result.k == 1
     assert result.target_met is True
+    
+
+def test_gw_counts_property_tallies_connections():
+    nodes = [
+        _make_node("N1", 37.4000, 127.1200),
+        _make_node("N2", 37.4001, 127.1201),
+    ]
+    dem = FakeFlatDem()
+    result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=3, coverage_target=1.0)
+    total_counted = sum(result.gw_counts.values())
+    assert total_counted == sum(1 for c in result.connections.values() if c is not None)
+
+
+def test_node_gw_ids_includes_all_receiving_chosen_gws():
+    nodes = [_make_node("N1", 37.4000, 127.1200)]
+    dem = FakeFlatDem()
+    result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=3, coverage_target=1.0)
+    assert "N1" in result.node_gw_ids
+    assert isinstance(result.node_gw_ids["N1"], list)

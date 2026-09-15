@@ -1,151 +1,151 @@
 # lorascape/gui/widgets/map_widget.py
 """
-PyQtGraph 기반 지도 위젯임. DEM 음영기복도를 배경 이미지로 깔고,
-그 위에 GW(별 마커)/Node(원 마커, 커버 여부에 따라 색 다르게)를 뿌림.
-
-folium 대신 이걸 쓰는 이유: 인터넷 없이도 완전히 오프라인으로 동작해야 하고
-(현장 설치 위치가 하천변/공원이라 Wi-Fi 없을 수 있음), DEM 데이터를 이미 갖고
-있으니 그걸 배경으로 활용하는 게 자연스러움 (README/설계문서 논의 참고).
+Folium 기반 지도 위젯임 (QWebEngineView 안에 Leaflet 지도를 그림).
+실제 레이어 조립 로직은 map_layers.py로, JS 브릿지는 map_bridge.py로 뺐음 -
+이 파일은 Qt 위젯 껍데기(로딩 오버레이, 이벤트 연결, refresh 호출 순서)만 담당함.
 """
-import numpy as np
-import pyqtgraph as pg
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtGui import QColor
+import tempfile
+import folium
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtWebChannel import QWebChannel
+from PyQt5.QtCore import Qt, QUrl, QTimer, pyqtSignal
 
-from lorascape.data.dem_loader import DemLoader
-from lorascape.data.coord_transform import latlon_to_xy
-from lorascape.gui.widgets.hillshade import compute_hillshade
-from lorascape.data.schema import GatewaySite, NodeSite
+from lorascape.gui.widgets.map_bridge import MapBridge, webchannel_init_script, map_event_script
+from lorascape.gui.widgets import map_layers as layers
 
-# 마커 색상임. 참고 디자인 팔레트(DARK/PANEL/TEXT 등)에서 그대로 가져온 색.
-COLOR_GW = "#FFD700"          # GW는 노란 별
-COLOR_NODE_COVERED = "#00C94A"   # 커버된 Node는 초록
-COLOR_NODE_UNCOVERED = "#FF4444"  # 미커버 Node는 빨강
-BG_DARK = "#181b22"
 
 
 class MapWidget(QWidget):
-    """
-    DEM 음영기복도 + GW/Node 마커를 보여주는 지도 위젯임.
-    좌표계는 위경도(EPSG:4326) 그대로 화면 x/y축으로 씀 (평면좌표로 안 바꾼 이유:
-    화면 표시는 위경도 그대로가 직관적이고, 실제 거리 계산은 어차피 core 쪽에서
-    coord_transform.py로 정확하게 하니까 화면 표시용으로는 위경도로 충분함).
-    """
-
-    # 사용자가 지도에서 GW/Node 마커를 클릭했을 때 발생하는 시그널임.
-    # (gw_id 또는 node_id, 'gw' 또는 'node' 문자열)을 넘겨줌 - 상세창 여는 용도로 쓸 예정.
-    sig_marker_clicked = pyqtSignal(str, str)
+    """Folium 기반 지도 위젯임."""
+    sig_map_clicked       = pyqtSignal(float, float)
+    sig_map_right_clicked = pyqtSignal(float, float)
+    sig_gw_dragged        = pyqtSignal(str, float, float)
+    sig_nd_dragged        = pyqtSignal(str, float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._dem: DemLoader | None = None
-        self._hillshade_item: pg.ImageItem | None = None
-        self._gw_scatter: pg.ScatterPlotItem | None = None
-        self._node_scatter: pg.ScatterPlotItem | None = None
-        self._gw_lookup: dict = {}   # 화면상 인덱스 -> gw_id 매핑 (클릭 판정용)
-        self._node_lookup: dict = {}
+        self._bounds = (126.0, 34.0, 130.0, 38.5)
         self._build()
 
     def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.view = QWebEngineView()
+        lay.addWidget(self.view)
 
-        pg.setConfigOption("background", BG_DARK)
-        pg.setConfigOption("foreground", "#a0a8be")
+        self.channel = QWebChannel()
+        self.bridge  = MapBridge()
+        self.channel.registerObject("bridge", self.bridge)
+        self.view.page().setWebChannel(self.channel)
+        self.bridge.clicked.connect(self.sig_map_clicked)
+        self.bridge.right_clicked.connect(self.sig_map_right_clicked)
+        self.bridge.gw_dragged.connect(self.sig_gw_dragged)
+        self.bridge.nd_dragged.connect(self.sig_nd_dragged)
 
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setAspectLocked(True)  # 위경도 비율 왜곡 안 되게 고정
-        self.plot_widget.setLabel("bottom", "경도")
-        self.plot_widget.setLabel("left", "위도")
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.15)
-        layout.addWidget(self.plot_widget)
+        self._loading_overlay = QWidget(self)
+        self._loading_overlay.setStyleSheet("background: rgba(15, 17, 23, 160);")
+        self._loading_overlay.hide()
+        self._loading_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-        self._gw_scatter = pg.ScatterPlotItem(
-            symbol="star", size=16, brush=pg.mkBrush(COLOR_GW), pen=pg.mkPen("#8a7000")
-        )
-        self._node_scatter = pg.ScatterPlotItem(symbol="o", size=8, pen=None)
+        ov_lay = QVBoxLayout(self._loading_overlay)
+        ov_lay.setAlignment(Qt.AlignCenter)
 
-        self.plot_widget.addItem(self._gw_scatter)
-        self.plot_widget.addItem(self._node_scatter)
+        self._spinner_lbl = QLabel()
+        self._spinner_lbl.setAlignment(Qt.AlignCenter)
+        self._spinner_lbl.setFixedSize(64, 64)
+        ov_lay.addWidget(self._spinner_lbl, alignment=Qt.AlignCenter)
 
-        self._gw_scatter.sigClicked.connect(self._on_gw_clicked)
-        self._node_scatter.sigClicked.connect(self._on_node_clicked)
+        self._loading_text = QLabel("히트맵 계산 중...")
+        self._loading_text.setAlignment(Qt.AlignCenter)
+        self._loading_text.setStyleSheet(
+            "color:#e0e4ef; font-size:13px; font-weight:bold; padding-top:12px; background:transparent;")
+        ov_lay.addWidget(self._loading_text)
 
-    def load_background(self, dem: DemLoader, lat_min: float, lat_max: float, lon_min: float, lon_max: float):
+        self._spinner_angle = 0
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.timeout.connect(self._rotate_spinner)
+        self._spinner_timer.setInterval(40)
+
+        self.refresh()
+
+    def _rotate_spinner(self):
+        self._spinner_angle = (self._spinner_angle + 12) % 360
+        self._draw_spinner()
+
+    def _draw_spinner(self):
+        from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor
+        pix = QPixmap(64, 64)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#4f8ef7"))
+        pen.setWidth(5)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        p.translate(32, 32)
+        p.rotate(self._spinner_angle)
+        p.drawArc(-24, -24, 48, 48, 0, 270 * 16)
+        p.end()
+        self._spinner_lbl.setPixmap(pix)
+
+    def show_loading(self, text="히트맵 계산 중..."):
+        self._loading_text.setText(text)
+        self._loading_overlay.setGeometry(self.rect())
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        self._spinner_timer.start()
+
+    def update_loading_text(self, text: str):
+        if self._loading_overlay.isVisible():
+            self._loading_text.setText(text)
+
+    def hide_loading(self):
+        self._loading_overlay.hide()
+        self._spinner_timer.stop()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._loading_overlay.isVisible():
+            self._loading_overlay.setGeometry(self.rect())
+
+    def set_bounds(self, bounds):
+        """bounds: (lon_min, lat_min, lon_max, lat_max) - EPSG:4326"""
+        self._bounds = bounds
+
+    def refresh(self, gws=None, nodes=None, result=None,
+                heatmaps=None, selected_gws=None, map_tile=None,
+                measure_pts=None, field_data=None, settings=None):
         """
-        DEM 음영기복도를 배경으로 그림. 기존 배경 있으면 지우고 새로 그림.
+        지도를 새로 렌더링함. 실제 레이어 조립은 map_layers.py의 함수들이 담당하고,
+        여기선 folium.Map 생성 -> 레이어 순서대로 추가 -> JS 브릿지 삽입 -> 렌더링만 함.
         """
-        self._dem = dem
-        grid, extent = dem.read_elevation_grid(lat_min, lat_max, lon_min, lon_max)
-        shaded = compute_hillshade(grid)
+        s = settings or {}
+        hm_opacity  = float(s.get("heatmap_opacity",  0.65))
+        cov_opacity = float(s.get("coverage_opacity", 0.40))
 
-        if self._hillshade_item is not None:
-            self.plot_widget.removeItem(self._hillshade_item)
+        b = self._bounds
+        center = [(b[1] + b[3]) / 2, (b[0] + b[2]) / 2]
+        span = max(b[2] - b[0], b[3] - b[1])
+        zoom = 14 if span < 0.1 else 12 if span < 0.5 else 10 if span < 2.0 else 8
+        tile = map_tile or "CartoDB Voyager"
 
-        self._hillshade_item = pg.ImageItem(shaded.T)  # PyQtGraph는 (x, y) 축이 numpy와 반대라 전치 필요
-        lon_min_e, lon_max_e, lat_min_e, lat_max_e = extent
-        self._hillshade_item.setRect(
-            lon_min_e, lat_min_e, lon_max_e - lon_min_e, lat_max_e - lat_min_e
-        )
-        self._hillshade_item.setZValue(-10)  # 마커보다 항상 아래에 그려지게 함
-        self.plot_widget.addItem(self._hillshade_item)
+        m = folium.Map(location=center, zoom_start=zoom, tiles=tile, prefer_canvas=True)
+        gw_color_map = layers.build_gw_color_map(gws)
 
-    def set_gateways(self, gateways: list[GatewaySite]):
-        """GW 목록을 지도에 별 마커로 표시함."""
-        self._gw_lookup = {i: gw.gw_id for i, gw in enumerate(gateways)}
-        if not gateways:
-            self._gw_scatter.setData([])
-            return
-        spots = [{"pos": (gw.lon, gw.lat), "data": i} for i, gw in enumerate(gateways)]
-        self._gw_scatter.setData(spots)
+        layers.add_measure_layer(m, measure_pts)
+        layers.add_heatmap_layers(m, heatmaps, hm_opacity)
+        layers.add_coverage_layers(m, nodes, result, selected_gws, cov_opacity)
+        layers.add_node_marker_layer(m, nodes, result, gw_color_map, selected_gws)
+        layers.add_gw_marker_layer(m, gws, result, gw_color_map)
+        layers.add_field_data_layer(m, field_data)
 
-    def set_nodes(self, nodes: list[NodeSite], coverage: dict | None = None):
-        """
-        Node 목록을 지도에 원 마커로 표시함.
-        coverage: {node_id: bool} 형태로 커버 여부를 넘기면 색이 초록/빨강으로 갈림.
-                  안 넘기면 전부 회색으로 표시함 (아직 분석 전 상태).
-        """
-        self._node_lookup = {i: nd.node_id for i, nd in enumerate(nodes)}
-        if not nodes:
-            self._node_scatter.setData([])
-            return
+        folium.LayerControl(collapsed=False).add_to(m)
 
-        spots = []
-        for i, nd in enumerate(nodes):
-            if coverage is None:
-                color = "#7a8099"  # 분석 전에는 회색
-            else:
-                color = COLOR_NODE_COVERED if coverage.get(nd.node_id, False) else COLOR_NODE_UNCOVERED
-            spots.append({
-                "pos": (nd.lon, nd.lat), "data": i,
-                "brush": pg.mkBrush(color), "pen": pg.mkPen(None),
-            })
-        self._node_scatter.setData(spots)
+        map_name = m.get_name()
+        m.get_root().html.add_child(folium.Element(webchannel_init_script()))
+        m.get_root().script.add_child(folium.Element(map_event_script(map_name)))
 
-    def _on_gw_clicked(self, scatter, points):
-        if not points:
-            return
-        idx = points[0].data()
-        gw_id = self._gw_lookup.get(idx)
-        if gw_id is not None:
-            self.sig_marker_clicked.emit(gw_id, "gw")
-
-    def _on_node_clicked(self, scatter, points):
-        if not points:
-            return
-        idx = points[0].data()
-        node_id = self._node_lookup.get(idx)
-        if node_id is not None:
-            self.sig_marker_clicked.emit(node_id, "node")
-
-    def fit_to_data(self, gateways: list[GatewaySite], nodes: list[NodeSite]):
-        """모든 GW/Node가 화면에 다 보이게 뷰 범위를 자동으로 맞춤."""
-        all_lons = [g.lon for g in gateways] + [n.lon for n in nodes]
-        all_lats = [g.lat for g in gateways] + [n.lat for n in nodes]
-        if not all_lons:
-            return
-        margin_lon = (max(all_lons) - min(all_lons)) * 0.1 or 0.01
-        margin_lat = (max(all_lats) - min(all_lats)) * 0.1 or 0.01
-        self.plot_widget.setXRange(min(all_lons) - margin_lon, max(all_lons) + margin_lon)
-        self.plot_widget.setYRange(min(all_lats) - margin_lat, max(all_lats) + margin_lat)
+        tmp = tempfile.NamedTemporaryFile(suffix='.html', delete=False, mode='w', encoding='utf-8')
+        m.save(tmp.name)
+        self.view.setUrl(QUrl.fromLocalFile(tmp.name))

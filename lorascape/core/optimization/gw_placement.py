@@ -44,10 +44,20 @@ class ConnectionResult:
 @dataclass
 class OptimizationResult:
     gateways: list[GatewaySite]
-    connections: dict[str, Optional[ConnectionResult]]
+    connections: dict[str, Optional[ConnectionResult]]  # node_id -> 최적 연결
+    node_gw_ids: dict[str, list[str]]  # ★ 추가: node_id -> 이 Node를 수신하는 선택된 GW id 목록 (중첩커버/다이버시티 표시용)
     coverage_ratio: float
     k: int
     target_met: bool
+
+    @property
+    def gw_counts(self) -> dict[str, int]:
+        """GW별 담당(최적 연결로 채택된) Node 개수임. GW 마커 툴팁에 씀."""
+        counts: dict[str, int] = {}
+        for conn in self.connections.values():
+            if conn is not None:
+                counts[conn.gw_id] = counts.get(conn.gw_id, 0) + 1
+        return counts
 
 
 def compute_total_path_loss(
@@ -202,21 +212,25 @@ def _greedy_select(
 
     # 최종 연결 결과: 각 Node에 대해 선택된 GW들 중 경로손실이 가장 낮은 연결을 채택
     connections = {}
+    node_gw_ids: dict[str, list[str]] = {}
     connected_count = 0
     for node in nodes:
         best_conn: Optional[ConnectionResult] = None
+        receiving_gw_ids: list[str] = []
         for gw in chosen:
             conn = matrix[gw.gw_id].get(node.node_id)
             if conn is None:
                 continue
+            receiving_gw_ids.append(gw.gw_id)
             if best_conn is None or conn.path_loss_db < best_conn.path_loss_db:
                 best_conn = conn
         connections[node.node_id] = best_conn
+        node_gw_ids[node.node_id] = receiving_gw_ids
         if best_conn is not None:
             connected_count += 1
 
     coverage_ratio = connected_count / len(nodes) if nodes else 0.0
-    return chosen, connections, coverage_ratio
+    return chosen, connections, node_gw_ids, coverage_ratio
 
 
 def optimize_gw_placement(
@@ -244,10 +258,12 @@ def optimize_gw_placement(
 
     candidates = _build_candidate_pool(nodes, coords, pool_size, dem)
     matrix = _compute_link_matrix(candidates, nodes, dem, fc_mhz, environment, max_path_loss_db, **link_kwargs)
-    chosen, connections, coverage_ratio = _greedy_select(candidates, nodes, matrix, initial_k, max_k, coverage_target)
+    chosen, connections, node_gw_ids, coverage_ratio = _greedy_select(
+        candidates, nodes, matrix, initial_k, max_k, coverage_target
+    )
 
     return OptimizationResult(
-        gateways=chosen, connections=connections,
+        gateways=chosen, connections=connections, node_gw_ids=node_gw_ids,
         coverage_ratio=coverage_ratio, k=len(chosen),
         target_met=coverage_ratio >= coverage_target,
     )
