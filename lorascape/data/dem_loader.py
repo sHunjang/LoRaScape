@@ -91,6 +91,43 @@ class DemLoader:
             return False  # DEM 범위 밖이거나 nodata면 설치 불가로 간주
         return True  # 지금은 고도값만 있으면 일단 설치 가능으로 판정 (추후 조건 강화 필요)
 
+
+    def read_elevation_grid(
+        self, lat_min: float, lat_max: float, lon_min: float, lon_max: float,
+        max_pixels: int = 800,
+    ):
+        """
+        지정한 위경도 범위(bounding box)의 고도 격자를 numpy 배열로 읽어옴.
+        지도 배경(음영기복도) 렌더링용으로 씀 - get_elevation처럼 점 하나씩이 아니라
+        영역 전체를 한 번에 읽어야 해서 별도 메서드로 분리함.
+
+        max_pixels: 너무 큰 DEM을 그대로 읽으면 화면에 다 못 보여주고 느려지기만 하니까
+                    긴 변 기준으로 이 픽셀 수 이내로 다운샘플링함.
+
+        반환값: (elevation_2d_array, (lon_min, lon_max, lat_min, lat_max)) 튜플임.
+                두 번째 값은 나중에 화면에 그릴 때 좌표축 맞추는 용도(extent)로 씀.
+        """
+        from rasterio.warp import transform as rio_transform
+        from rasterio.windows import from_bounds
+
+        xs, ys = rio_transform("EPSG:4326", self.crs, [lon_min, lon_max], [lat_min, lat_max])
+        window = from_bounds(xs[0], ys[0], xs[1], ys[1], transform=self.dataset.transform)
+
+        # 원본 해상도로 읽으면 너무 클 수 있으니, out_shape으로 다운샘플링하며 읽음
+        win_height = max(1, int(window.height))
+        win_width = max(1, int(window.width))
+        scale = min(1.0, max_pixels / max(win_height, win_width))
+        out_h = max(1, int(win_height * scale))
+        out_w = max(1, int(win_width * scale))
+
+        data = self.dataset.read(1, window=window, out_shape=(out_h, out_w))
+
+        if self.dataset.nodata is not None:
+            data = np.where(data == self.dataset.nodata, np.nan, data)
+
+        return data, (lon_min, lon_max, lat_min, lat_max)
+
+
     def close(self):
         """파일 핸들 정리함. with문으로 안 쓸 경우 명시적으로 호출 필요."""
         self.dataset.close()
