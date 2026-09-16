@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self.map_widget.refresh(
             gws=self.gateways, nodes=self.nodes, result=self.last_result,
             heatmaps=layers, selected_gws=gw_ids,
+            settings=self._settings,  # ★ 추가: heatmap_opacity가 실제로 반영되도록
         )
         self.status_label.setText(f"선택된 GW {len(gw_ids)}개 커버리지 히트맵 표시 중")
 

@@ -6,7 +6,7 @@ GW/Node 목록창에서 개체별로 편집함. 여기는 "분석 전체에 적�
 """
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QGroupBox, QLabel,
+    QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QGroupBox, QLabel, QSlider
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -132,6 +132,24 @@ class SettingsWindow(QDialog):
         fl2.addRow("최대 추가 배치 GW 수", self.sp_max_add)
         lay.addWidget(grp2)
 
+        grp3 = QGroupBox("지도 표시")
+        fl3 = QFormLayout(grp3)
+        fl3.setSpacing(8)
+
+        opacity_row = QHBoxLayout()
+        self.sl_heatmap_opacity = QSlider(Qt.Horizontal)
+        self.sl_heatmap_opacity.setRange(10, 100)  # 10%~100%
+        self.sl_heatmap_opacity.setValue(int(self._cfg["heatmap_opacity"] * 100))
+        self.lbl_heatmap_opacity_val = QLabel(f"{self.sl_heatmap_opacity.value()}%")
+        self.sl_heatmap_opacity.valueChanged.connect(
+            lambda v: self.lbl_heatmap_opacity_val.setText(f"{v}%")
+        )
+        opacity_row.addWidget(self.sl_heatmap_opacity)
+        opacity_row.addWidget(self.lbl_heatmap_opacity_val)
+
+        fl3.addRow("히트맵 진하기", opacity_row)
+        lay.addWidget(grp3)
+
         btn_l = QHBoxLayout()
         btn_reset = QPushButton("기본값 복원")
         btn_reset.clicked.connect(self._reset_defaults)
@@ -152,6 +170,7 @@ class SettingsWindow(QDialog):
         self.sp_fc.setValue(DEFAULT_CONFIG["fc_mhz"])
         self.sp_bw.setValue(DEFAULT_CONFIG["bandwidth_hz"])
         self.sp_nf.setValue(DEFAULT_CONFIG["receiver_noise_figure_db"])
+        self.sl_heatmap_opacity.setValue(int(DEFAULT_CONFIG["heatmap_opacity"] * 100))
         idx = self.cb_env.findData(DEFAULT_CONFIG["environment"])
         if idx >= 0:
             self.cb_env.setCurrentIndex(idx)
@@ -166,6 +185,7 @@ class SettingsWindow(QDialog):
             "environment": self.cb_env.currentData(),
             "coverage_target": self.sp_target.value(),
             "max_additional": self.sp_max_add.value(),
+            "heatmap_opacity": self.sl_heatmap_opacity.value() / 100.0,
         }
 
     def _accept(self):

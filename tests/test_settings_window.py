@@ -61,3 +61,21 @@ def test_settings_window_environment_combo_has_all_options(qapp, isolated_config
     assert win.cb_env.count() == 4
     keys = [win.cb_env.itemData(i) for i in range(win.cb_env.count())]
     assert set(keys) == {"dense_urban", "urban", "suburban", "open"}
+    
+
+def test_settings_window_heatmap_opacity_slider_defaults(qapp, isolated_config):
+    win = SettingsWindow()
+    assert win.sl_heatmap_opacity.value() == int(app_config.DEFAULT_CONFIG["heatmap_opacity"] * 100)
+
+
+def test_settings_window_heatmap_opacity_collected_and_saved(qapp, isolated_config):
+    win = SettingsWindow()
+    win.sl_heatmap_opacity.setValue(50)
+
+    received = []
+    win.sig_settings_changed.connect(lambda s: received.append(s))
+    win._accept()
+
+    assert received[0]["heatmap_opacity"] == pytest.approx(0.5)
+    reloaded = app_config.load_config()
+    assert reloaded["heatmap_opacity"] == pytest.approx(0.5)

@@ -50,3 +50,8 @@ def test_default_config_includes_analysis_settings():
         "environment", "coverage_target", "max_additional",
     }
     assert required_keys.issubset(app_config.DEFAULT_CONFIG.keys())
+    
+
+def test_default_config_includes_heatmap_opacity():
+    assert "heatmap_opacity" in app_config.DEFAULT_CONFIG
+    assert 0.0 < app_config.DEFAULT_CONFIG["heatmap_opacity"] <= 1.0

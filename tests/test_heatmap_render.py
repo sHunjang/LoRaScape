@@ -66,3 +66,13 @@ def test_build_heatmap_layer_dict_has_expected_keys():
     assert layer["gw_id"] == "GW1"
     assert layer["url"].startswith("data:image/png;base64,")
     assert layer["bounds"] == [[37.39, 127.11], [37.41, 127.13]]
+    
+
+def test_pr_to_alpha_strong_signal_has_higher_alpha_than_weak():
+    from lorascape.gui.widgets.heatmap_render import _pr_to_alpha
+    assert _pr_to_alpha(-75) > _pr_to_alpha(-105)
+
+
+def test_pr_to_alpha_out_of_range_is_fully_transparent():
+    from lorascape.gui.widgets.heatmap_render import _pr_to_alpha
+    assert _pr_to_alpha(-500) == 0
