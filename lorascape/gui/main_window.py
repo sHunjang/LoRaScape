@@ -137,9 +137,23 @@ class MainWindow(QMainWindow):
             self._gw_list_win.sig_load_excel_requested.connect(
                 lambda path: self._on_excel_load_requested(path, target="gw")
             )
+            self._gw_list_win.sig_selected_coverage_requested.connect(self._on_selected_coverage_requested)
         else:
             self._gw_list_win.set_gateways(self.gateways)
         return self._gw_list_win
+
+    def _on_selected_coverage_requested(self, gw_ids: list):
+        """
+        GW목록창에서 특정 GW들만 골라 '선택 커버리지'를 눌렀을 때임.
+        빈 리스트면 필터 해제(전체 다시 표시).
+        """
+        selected = gw_ids if gw_ids else None
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result, selected_gws=selected)
+        if gw_ids:
+            self.status_label.setText(f"선택된 GW {len(gw_ids)}개만 표시 중")
+        else:
+            self.status_label.setText("전체 GW 표시로 복귀")
+
 
     def _open_gw_list(self):
         win = self._ensure_gw_list_win()
