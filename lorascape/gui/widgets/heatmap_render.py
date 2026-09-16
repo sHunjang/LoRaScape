@@ -27,6 +27,27 @@ DEFAULT_COLOR_LEVELS = [
 ]
 
 
+# 다중 GW 선택 시 각 GW에 배정할 색조(hue) 팔레트임. 색상환에서 서로 최대한
+# 멀리 떨어지게 골라서, 겹치는 지역도 시각적으로 구분되게 함.
+# (dBm 강도는 알파값으로, GW 구분은 색상으로 표현하는 방식 - ATDI 참고사례와
+# 유사하게 GW별로 톤을 다르게 가져감)
+GW_HUE_PALETTE = [
+    (255, 60, 60),    # 빨강
+    (60, 140, 255),   # 파랑
+    (60, 220, 100),   # 초록
+    (255, 180, 40),   # 주황
+    (200, 80, 255),   # 보라
+    (40, 220, 220),   # 청록
+    (255, 100, 180),  # 분홍
+    (180, 220, 40),   # 연두
+]
+
+
+def get_gw_color(index: int) -> tuple:
+    """GW 인덱스에 따라 팔레트에서 색상을 순환 배정함."""
+    return GW_HUE_PALETTE[index % len(GW_HUE_PALETTE)]
+
+
 def _pr_to_rgba(pr: float, color_levels=None) -> tuple:
     levels = color_levels or DEFAULT_COLOR_LEVELS
     for threshold, rgba in levels:
@@ -35,21 +56,47 @@ def _pr_to_rgba(pr: float, color_levels=None) -> tuple:
     return (0, 0, 0, 0)
 
 
-def render_heatmap_image(grid: HeatmapGrid, color_levels=None) -> np.ndarray:
+def _pr_to_alpha(pr: float) -> int:
+    """
+    수신전력을 투명도(alpha)로 변환함. 신호가 강할수록 진하게, 약할수록 옅게
+    보이도록 함 - 다중 GW 색상 구분 모드에서는 색상 자체가 GW를 구분하는
+    용도라서, 강도는 알파(투명도)로 표현하는 방식으로 바꿈.
+    """
+    if pr >= -80:
+        return 200
+    elif pr >= -90:
+        return 170
+    elif pr >= -100:
+        return 130
+    elif pr >= -110:
+        return 90
+    elif pr >= -120:
+        return 50
+    else:
+        return 0  # 커버리지 없음 - 완전 투명
+
+
+def render_heatmap_image(grid: HeatmapGrid, color_levels=None, base_color: tuple = None) -> np.ndarray:
     """
     HeatmapGrid를 (H, W, 4) uint8 RGBA numpy 배열로 변환함.
-    folium ImageOverlay는 이미지의 (0,0)이 왼쪽 위(북서쪽)라고 가정하는데,
-    우리 pr_grid는 lat_grid를 오름차순(남->북)으로 만들었으니 위아래를 뒤집어야
-    실제 지도 방향과 맞음 (이 뒤집기를 빼먹으면 히트맵이 위아래가 뒤집혀서 나타남).
+
+    base_color가 주어지면(다중 GW 모드): 그 색상 고정 + pr값에 따라 알파(투명도)만
+    다르게 해서, GW별로 색조가 구분되게 함.
+    base_color가 None이면(단일 GW 모드): 기존처럼 dBm 구간별 5색 그라데이션(빨강~파랑)을 씀.
     """
     rows, cols = grid.pr_grid.shape
     rgba = np.zeros((rows, cols, 4), dtype=np.uint8)
 
     for i in range(rows):
         for j in range(cols):
-            rgba[i, j] = _pr_to_rgba(grid.pr_grid[i, j], color_levels)
+            pr = grid.pr_grid[i, j]
+            if base_color is not None:
+                alpha = _pr_to_alpha(pr)
+                rgba[i, j] = (*base_color, alpha)
+            else:
+                rgba[i, j] = _pr_to_rgba(pr, color_levels)
 
-    return np.flipud(rgba)  # 남->북 순서 배열을 이미지 좌표계(북이 위)로 뒤집음
+    return np.flipud(rgba)
 
 
 def to_data_uri(rgba_image: np.ndarray) -> str:
@@ -65,13 +112,16 @@ def to_data_uri(rgba_image: np.ndarray) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def build_heatmap_layer_dict(grid: HeatmapGrid, color_levels=None) -> dict:
+def build_heatmap_layer_dict(grid: HeatmapGrid, color_levels=None, base_color: tuple = None) -> dict:
     """
     map_layers.add_heatmap_layers()가 기대하는 형태({'gw_id', 'url', 'bounds'})로
     조립해서 반환함. main_window가 이 함수 결과를 그대로 refresh(heatmaps=[...])에
     넘기면 됨.
+
+    base_color가 주어지면(다중 GW 모드): render_heatmap_image에 그대로 전달해서
+    GW별로 색조가 구분되게 함.
     """
-    rgba = render_heatmap_image(grid, color_levels)
+    rgba = render_heatmap_image(grid, color_levels, base_color)
     data_uri = to_data_uri(rgba)
 
     lat_min, lat_max, lon_min, lon_max = grid.bounds

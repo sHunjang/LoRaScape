@@ -76,3 +76,51 @@ class OptimizeWorker(QObject):
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
+            
+
+class HeatmapWorker(QObject):
+    """
+    선택된 GW들의 커버리지 히트맵을 백그라운드에서 계산하는 워커임.
+    GW 1개당 격자 계산이 몇 초~몇십 초 걸릴 수 있어서(grid_size에 따라 다름),
+    여러 GW를 동시에 계산하면 그만큼 더 오래 걸림 - 메인 스레드 블로킹 방지용.
+    """
+    finished = pyqtSignal(list)  # list[dict] - build_heatmap_layer_dict 결과들
+    progress = pyqtSignal(int, str)  # (진행률 0~100, 메시지)
+    error = pyqtSignal(str)
+
+    def __init__(self, gateways: list, dem_path: str, grid_size: int = 40,
+                 radius_km: float = 2.0, analysis_settings: dict = None):
+        super().__init__()
+        self.gateways = gateways
+        self.dem_path = dem_path
+        self.grid_size = grid_size
+        self.radius_km = radius_km
+        self.analysis_settings = analysis_settings or {}
+
+    def run(self):
+        try:
+            from lorascape.core.optimization.heatmap import compute_gw_heatmap_grid
+            from lorascape.gui.widgets.heatmap_render import build_heatmap_layer_dict, get_gw_color
+
+            multi_gw = len(self.gateways) > 1
+            layers = []
+
+            with DemLoader(self.dem_path) as dem:
+                for idx, gw in enumerate(self.gateways):
+                    pct = int((idx / max(len(self.gateways), 1)) * 100)
+                    self.progress.emit(pct, f"{gw.gw_id} 커버리지 계산 중... ({idx+1}/{len(self.gateways)})")
+
+                    grid = compute_gw_heatmap_grid(
+                        gw, dem,
+                        radius_km=self.radius_km, grid_size=self.grid_size,
+                        fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
+                        environment=self.analysis_settings.get("environment", "urban"),
+                    )
+
+                    base_color = get_gw_color(idx) if multi_gw else None
+                    layer = build_heatmap_layer_dict(grid, base_color=base_color)
+                    layers.append(layer)
+
+            self.finished.emit(layers)
+        except Exception as e:
+            self.error.emit(str(e))

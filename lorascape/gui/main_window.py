@@ -11,7 +11,7 @@ from PyQt5.QtCore import Qt, QThread
 
 from lorascape.gui.widgets.map_widget import MapWidget
 from lorascape.gui.widgets.result_panel import ResultPanel
-from lorascape.gui.workers import LoadDataWorker, OptimizeWorker
+from lorascape.gui.workers import LoadDataWorker, OptimizeWorker, HeatmapWorker
 
 from lorascape.gui.app_config import load_config
 
@@ -142,17 +142,50 @@ class MainWindow(QMainWindow):
             self._gw_list_win.set_gateways(self.gateways)
         return self._gw_list_win
 
+
     def _on_selected_coverage_requested(self, gw_ids: list):
         """
         GW목록창에서 특정 GW들만 골라 '선택 커버리지'를 눌렀을 때임.
-        빈 리스트면 필터 해제(전체 다시 표시).
+        빈 리스트면 히트맵을 지우고 전체 마커만 다시 보여줌.
+        선택된 GW들의 격자 히트맵을 계산해서(무거운 연산이라 워커로 분리) 지도에 얹음.
         """
-        selected = gw_ids if gw_ids else None
-        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result, selected_gws=selected)
-        if gw_ids:
-            self.status_label.setText(f"선택된 GW {len(gw_ids)}개만 표시 중")
-        else:
+        if not gw_ids:
+            self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
             self.status_label.setText("전체 GW 표시로 복귀")
+            return
+
+        if not self.dem_path:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
+            return
+
+        selected_gateways = [gw for gw in self.gateways if gw.gw_id in gw_ids]
+
+        self.map_widget.show_loading("커버리지 히트맵 계산 중...")
+        self.status_label.setText(f"선택된 GW {len(gw_ids)}개 히트맵 계산 중...")
+
+        worker = HeatmapWorker(
+            selected_gateways, self.dem_path,
+            grid_size=self._settings.get("heatmap_grid_size", 40),
+            analysis_settings=self._settings,
+        )
+        worker.progress.connect(
+            lambda pct, msg: self.map_widget.update_loading_text(f"{msg} ({pct}%)")
+        )
+        self._start_worker(worker, lambda layers: self._on_heatmap_done(layers, gw_ids),
+                            error_slot=self._on_heatmap_error)
+
+    def _on_heatmap_done(self, layers: list, gw_ids: list):
+        self.map_widget.hide_loading()
+        self.map_widget.refresh(
+            gws=self.gateways, nodes=self.nodes, result=self.last_result,
+            heatmaps=layers, selected_gws=gw_ids,
+        )
+        self.status_label.setText(f"선택된 GW {len(gw_ids)}개 커버리지 히트맵 표시 중")
+
+    def _on_heatmap_error(self, message: str):
+        self.map_widget.hide_loading()
+        self.status_label.setText("히트맵 계산 실패")
+        _styled_message_box(self, QMessageBox.Warning, "히트맵 계산 실패", message).exec_()
 
 
     def _open_gw_list(self):
