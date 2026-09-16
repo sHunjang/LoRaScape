@@ -13,6 +13,9 @@ from lorascape.gui.widgets.map_widget import MapWidget
 from lorascape.gui.widgets.result_panel import ResultPanel
 from lorascape.gui.workers import LoadDataWorker, OptimizeWorker
 
+from lorascape.gui.app_config import load_config
+
+
 DARK = "#181b22"
 TEXT = "#e0e4ef"
 MUTED = "#7a8099"
@@ -67,6 +70,10 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._thread_active = False  # QThread deleteLater 이후에도 안전하게 실행중 여부를 판단하는 플래그
 
+        self._settings = load_config()
+
+        self._settings_win = None
+
         self._build_ui()
 
         if self.xlsx_path:
@@ -84,14 +91,17 @@ class MainWindow(QMainWindow):
         act_gw_list = QAction("GW 목록", self)
         act_node_list = QAction("단말 목록", self)
         act_optimize = QAction("GW 배치 검증 및 보강", self)
+        act_settings = QAction("설정", self)
 
         act_gw_list.triggered.connect(self._open_gw_list)
         act_node_list.triggered.connect(self._open_node_list)
         act_optimize.triggered.connect(self._on_optimize_clicked)
+        act_settings.triggered.connect(self._open_settings)
 
         tb.addAction(act_gw_list)
         tb.addAction(act_node_list)
         tb.addAction(act_optimize)
+        tb.addAction(act_settings)
 
         splitter = QSplitter(Qt.Horizontal)
         self.map_widget = MapWidget()
@@ -256,7 +266,9 @@ class MainWindow(QMainWindow):
 
         worker = OptimizeWorker(
             self.dem_path, self.nodes, existing_gateways=self.gateways,
-            max_additional=15, coverage_target=0.9,
+            max_additional=self._settings.get("max_additional", 15),
+            coverage_target=self._settings.get("coverage_target", 0.9),
+            analysis_settings=self._settings,
         )
         self._start_worker(worker, self._on_optimize_done, error_slot=self._on_optimize_error)
 
@@ -329,3 +341,18 @@ class MainWindow(QMainWindow):
 
     def _on_node_dragged(self, node_id, lon, lat):
         self.status_label.setText(f"{node_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
+
+
+
+    # ── 설정 창 ──────────────────────────────────────────
+    def _open_settings(self):
+        from lorascape.gui.widgets.settings_window import SettingsWindow
+        if self._settings_win is None:
+            self._settings_win = SettingsWindow(parent=self)
+            self._settings_win.sig_settings_changed.connect(self._on_settings_changed)
+        self._settings_win.show()
+        self._settings_win.raise_()
+
+    def _on_settings_changed(self, new_settings: dict):
+        self._settings.update(new_settings)
+        self.status_label.setText("분석 설정이 갱신되었습니다.")

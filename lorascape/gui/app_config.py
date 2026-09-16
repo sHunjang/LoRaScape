@@ -16,6 +16,16 @@ DEFAULT_CONFIG = {
     "dem_path": "",
     "dsm_path": "",
     "xlsx_path": "",
+    # 링크버짓/최적화 계산에 쓰이는 시스템 전체 파라미터임.
+    # GW/Node 개별 무선 파라미터(Pt, Gt, Lt, Gr, Lr 등)는 이미 GW/Node 목록창에서
+    # 개체별로 편집 가능하니 여기 넣지 않음 - 여기 넣으면 계산 시 개별 편집값을
+    # 덮어써버리는 충돌이 생김.
+    "fc_mhz": 920.0,
+    "bandwidth_hz": 125000.0,
+    "receiver_noise_figure_db": 6.0,
+    "environment": "urban",
+    "coverage_target": 0.9,
+    "max_additional": 15,
 }
 
 

@@ -43,28 +43,35 @@ class LoadDataWorker(QObject):
 class OptimizeWorker(QObject):
     """
     기존 설치된 GW를 검증하고, 부족하면 추가 GW를 배치하는 계산을 백그라운드에서 돌리는 워커임.
-    (기존 GW로 커버리지 검증 후, 목표 미달이면 부족한 만큼만 증설)
+    analysis_settings로 fc_mhz/bandwidth_hz/environment/receiver_noise_figure_db 같은
+    시스템 전체 파라미터를 받음 - GW/Node 개별 무선 파라미터는 각 엔티티 필드에서
+    그대로 읽어감 (evaluate_connection 기본 동작).
     """
-    finished = pyqtSignal(object)  # OptimizationResult
+    finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, dem_path: str, nodes: list, existing_gateways: list, max_additional: int, coverage_target: float):
+    def __init__(self, dem_path: str, nodes: list, existing_gateways: list,
+                 max_additional: int, coverage_target: float, analysis_settings: dict = None):
         super().__init__()
         self.dem_path = dem_path
         self.nodes = nodes
         self.existing_gateways = existing_gateways
         self.max_additional = max_additional
         self.coverage_target = coverage_target
+        self.analysis_settings = analysis_settings or {}
 
     def run(self):
         try:
             from lorascape.core.optimization.gw_placement import evaluate_and_augment
-            # DemLoader를 워커 스레드 안에서 새로 열음 - rasterio 파일 핸들을
-            # 스레드 간에 공유하면 문제가 생길 수 있어서, 워커마다 독립적으로 엶.
             with DemLoader(self.dem_path) as dem:
                 result = evaluate_and_augment(
                     self.nodes, self.existing_gateways, dem,
-                    max_additional=self.max_additional, coverage_target=self.coverage_target,
+                    max_additional=self.max_additional,
+                    coverage_target=self.coverage_target,
+                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
+                    environment=self.analysis_settings.get("environment", "urban"),
+                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
+                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
                 )
             self.finished.emit(result)
         except Exception as e:
