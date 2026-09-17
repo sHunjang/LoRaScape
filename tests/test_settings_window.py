@@ -79,3 +79,38 @@ def test_settings_window_heatmap_opacity_collected_and_saved(qapp, isolated_conf
     assert received[0]["heatmap_opacity"] == pytest.approx(0.5)
     reloaded = app_config.load_config()
     assert reloaded["heatmap_opacity"] == pytest.approx(0.5)
+
+
+def test_settings_window_grid_size_combo_has_all_presets(qapp, isolated_config):
+    from lorascape.gui.app_config import HEATMAP_GRID_SIZE_PRESETS
+    win = SettingsWindow()
+    assert win.cb_grid_size.count() == len(HEATMAP_GRID_SIZE_PRESETS)
+
+
+def test_settings_window_grid_size_defaults_to_40(qapp, isolated_config):
+    win = SettingsWindow()
+    assert win.cb_grid_size.currentData() == 40
+
+
+def test_settings_window_grid_size_collected_and_saved(qapp, isolated_config):
+    win = SettingsWindow()
+    idx = win.cb_grid_size.findData(80)
+    win.cb_grid_size.setCurrentIndex(idx)
+
+    received = []
+    win.sig_settings_changed.connect(lambda s: received.append(s))
+    win._accept()
+
+    assert received[0]["heatmap_grid_size"] == 80
+    reloaded = app_config.load_config()
+    assert reloaded["heatmap_grid_size"] == 80
+
+
+def test_settings_window_reset_restores_grid_size_default(qapp, isolated_config):
+    win = SettingsWindow()
+    idx = win.cb_grid_size.findData(80)
+    win.cb_grid_size.setCurrentIndex(idx)
+
+    win._reset_defaults()
+
+    assert win.cb_grid_size.currentData() == app_config.DEFAULT_CONFIG["heatmap_grid_size"]

@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
-from lorascape.gui.app_config import load_config, save_config
+from lorascape.gui.app_config import load_config, save_config, HEATMAP_GRID_SIZE_PRESETS
 
 DARK = "#181b22"
 PANEL = "#1e2130"
@@ -148,7 +148,21 @@ class SettingsWindow(QDialog):
         opacity_row.addWidget(self.lbl_heatmap_opacity_val)
 
         fl3.addRow("히트맵 진하기", opacity_row)
+        
+        self.cb_grid_size = QComboBox()
+        for size, label in HEATMAP_GRID_SIZE_PRESETS:
+            self.cb_grid_size.addItem(label, userData=size)
+        idx = self.cb_grid_size.findData(self._cfg["heatmap_grid_size"])
+        if idx >= 0:
+            self.cb_grid_size.setCurrentIndex(idx)
+
+        fl3.addRow("히트맵 격자 해상도", self.cb_grid_size)
+
+        note3 = QLabel("해상도가 높을수록 화질이 좋아지지만 계산 시간이 크게 늘어납니다 (GW 선택 개수만큼 배로 증가).")
+        note3.setStyleSheet(f"color:{MUTED};font-size:10px;")
+        note3.setWordWrap(True)
         lay.addWidget(grp3)
+        lay.addWidget(note3)
 
         btn_l = QHBoxLayout()
         btn_reset = QPushButton("기본값 복원")
@@ -174,6 +188,11 @@ class SettingsWindow(QDialog):
         idx = self.cb_env.findData(DEFAULT_CONFIG["environment"])
         if idx >= 0:
             self.cb_env.setCurrentIndex(idx)
+
+        idx = self.cb_grid_size.findData(DEFAULT_CONFIG["heatmap_grid_size"])
+        if idx >= 0:
+            self.cb_grid_size.setCurrentIndex(idx)            
+
         self.sp_target.setValue(DEFAULT_CONFIG["coverage_target"])
         self.sp_max_add.setValue(DEFAULT_CONFIG["max_additional"])
 
@@ -186,6 +205,7 @@ class SettingsWindow(QDialog):
             "coverage_target": self.sp_target.value(),
             "max_additional": self.sp_max_add.value(),
             "heatmap_opacity": self.sl_heatmap_opacity.value() / 100.0,
+            "heatmap_grid_size": self.cb_grid_size.currentData(),
         }
 
     def _accept(self):

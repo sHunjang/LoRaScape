@@ -55,3 +55,14 @@ def test_default_config_includes_analysis_settings():
 def test_default_config_includes_heatmap_opacity():
     assert "heatmap_opacity" in app_config.DEFAULT_CONFIG
     assert 0.0 < app_config.DEFAULT_CONFIG["heatmap_opacity"] <= 1.0
+
+
+def test_default_config_includes_heatmap_grid_size():
+    assert "heatmap_grid_size" in app_config.DEFAULT_CONFIG
+    assert app_config.DEFAULT_CONFIG["heatmap_grid_size"] > 0
+
+
+def test_heatmap_grid_size_presets_include_default():
+    default_size = app_config.DEFAULT_CONFIG["heatmap_grid_size"]
+    preset_sizes = [size for size, _ in app_config.HEATMAP_GRID_SIZE_PRESETS]
+    assert default_size in preset_sizes
