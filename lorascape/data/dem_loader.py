@@ -8,6 +8,8 @@ rasterio 라이브러리를 씀 - GIS 래스터(.img, .tif 등) 표준 처리 �
 """
 import numpy as np
 import rasterio
+
+from rasterio import warp as rio_warp
 from rasterio.warp import transform as rio_transform
 
 
@@ -144,3 +146,21 @@ class DemLoader:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+def get_dem_latlon_bounds(dem_path: str) -> tuple:
+    """
+    DEM 파일의 지리적 범위를 위경도(EPSG:4326)로 반환하는 가벼운 함수임.
+    (lon_min, lat_min, lon_max, lat_max) 순서로 반환함.
+
+    DemLoader 클래스를 안 쓰고 별도 함수로 만든 이유: DemLoader.__init__은
+    성능을 위해 밴드 전체를 메모리에 캐싱하는데, 여기선 "지리적 범위"라는
+    메타데이터 하나만 필요해서 그 무거운 로딩을 할 필요가 없음 - 앱 시작
+    시점에 빠르게 호출되어야 하는 함수라 가볍게 만듦.
+    """
+    with rasterio.open(dem_path) as dataset:
+        bounds = dataset.bounds  # (left, bottom, right, top) - DEM 파일 자체 좌표계 기준
+        lon_min, lat_min, lon_max, lat_max = rio_warp.transform_bounds(
+            dataset.crs, "EPSG:4326", *bounds
+        )
+    return (lon_min, lat_min, lon_max, lat_max)

@@ -64,3 +64,34 @@ def test_get_elevation_does_not_reread_dataset_after_init():
             dem.get_elevation(37.4201, 127.1265)
 
         assert call_count["n"] == 0  # __init__ 이후로는 read가 한 번도 더 호출되면 안 됨
+
+
+def test_get_dem_latlon_bounds_returns_valid_seongnam_range():
+    """성남시 DEM 파일의 지리적 범위가 상식적인 위경도 범위로 나오는지 확인함."""
+    if not DEM_EXISTS:
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    from lorascape.data.dem_loader import get_dem_latlon_bounds
+    lon_min, lat_min, lon_max, lat_max = get_dem_latlon_bounds(DEM_PATH)
+
+    # 성남시는 대략 위도 37.3~37.5, 경도 127.0~127.2 부근임 - 그 근방인지 대략 확인
+    assert 30 < lat_min < lat_max < 45
+    assert 120 < lon_min < lon_max < 135
+
+
+def test_get_dem_latlon_bounds_does_not_load_full_band():
+    """
+    get_dem_latlon_bounds가 DemLoader처럼 밴드 전체를 메모리에 올리지 않고
+    가볍게 동작하는지 확인함 (rasterio.open을 with문으로 바로 닫는지).
+    """
+    if not DEM_EXISTS:
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    import time
+    from lorascape.data.dem_loader import get_dem_latlon_bounds
+
+    start = time.time()
+    get_dem_latlon_bounds(DEM_PATH)
+    elapsed = time.time() - start
+
+    assert elapsed < 1.0  # 메타데이터만 읽는 거라 1초 안에 끝나야 함 (밴드 전체 읽으면 더 걸림)

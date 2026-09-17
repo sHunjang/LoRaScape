@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "coverage_target": 0.9,
     "max_additional": 15,
     "heatmap_opacity": 1,
-    "heatmap_grid_size": 60,
+    "heatmap_grid_size": 40,
 }
 
 

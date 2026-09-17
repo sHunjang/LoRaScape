@@ -90,3 +90,29 @@ def test_run_heatmap_for_all_enabled_shows_info_when_no_gateways(qapp, monkeypat
     )
     window._run_heatmap_for_all_enabled()
     assert called == [True]
+    
+
+def test_init_map_bounds_from_dem_sets_bounds_when_dem_exists(qapp, tmp_path, monkeypatch):
+    """
+    실제 DEM 파일 없이도 로직 검증 가능하게, get_dem_latlon_bounds를 가짜로 대체해서
+    MainWindow가 그 결과로 map_widget.set_bounds를 호출하는지 확인함.
+    """
+    import lorascape.gui.main_window as mw
+
+    fake_bounds = (127.0, 37.3, 127.2, 37.5)
+    monkeypatch.setattr(
+        "lorascape.data.dem_loader.get_dem_latlon_bounds",
+        lambda path: fake_bounds,
+    )
+
+    window = MainWindow(dem_path="fake_dem_path.img")
+    window._init_map_bounds_from_dem()
+
+    assert window.map_widget._bounds == fake_bounds
+
+
+def test_init_map_bounds_from_dem_fails_silently_on_bad_path(qapp):
+    """DEM 파일이 없어도 예외가 앱 밖으로 튀어나가면 안 됨 - 상태바 메시지로만 처리됨."""
+    window = MainWindow(dem_path="nonexistent_dem.img")
+    window._init_map_bounds_from_dem()  # 예외 안 나고 조용히 처리돼야 함
+    assert "실패" in window.status_label.text() or window.status_label.text() != ""

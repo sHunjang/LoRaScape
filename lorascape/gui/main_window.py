@@ -89,6 +89,9 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
 
+        if self.dem_path:
+            self._init_map_bounds_from_dem()
+
         if self.xlsx_path:
             # ★ 앱 시작 시점의 자동 로딩은 "사용자가 직접 요청한 조작"이 아니라
             # "이전 세션에서 기억해둔 값을 다시 시도해보는 것"이라, 실패해도
@@ -559,3 +562,18 @@ class MainWindow(QMainWindow):
         self._measure_points = []
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
         self.status_label.setText("측정 초기화됨")
+    
+
+    def _init_map_bounds_from_dem(self):
+        """
+        DEM 파일의 지리적 범위를 읽어서 지도 초기 뷰로 설정함. 실패해도(DEM이 아직
+        준비 안 됐거나 손상됐거나) 앱 실행 자체를 막으면 안 되니 조용히 넘어감 -
+        이 경우 지도는 기본값(대한민국 전체)으로 남아있게 됨.
+        """
+        try:
+            from lorascape.data.dem_loader import get_dem_latlon_bounds
+            bounds = get_dem_latlon_bounds(self.dem_path)
+            self.map_widget.set_bounds(bounds)
+            self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
+        except Exception as e:
+            self.status_label.setText(f"DEM 범위 자동 설정 실패 (지도 기본 범위 사용): {e}")
