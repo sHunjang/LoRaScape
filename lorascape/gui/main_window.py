@@ -5,9 +5,10 @@ core.optimization.gw_placement / data.* 를 직접 씀 (별도 어댑터 레이�
 """
 from PyQt5.QtWidgets import (
     QMainWindow, QToolBar, QAction, QSplitter, QStatusBar, QLabel,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QMenu, QApplication,
 )
 from PyQt5.QtCore import Qt, QThread
+from PyQt5.QtGui import QCursor
 
 from lorascape.gui.widgets.map_widget import MapWidget
 from lorascape.gui.widgets.result_panel import ResultPanel
@@ -17,6 +18,7 @@ from lorascape.gui.app_config import load_config
 
 
 DARK = "#181b22"
+PANEL = "#1e2130"
 TEXT = "#e0e4ef"
 MUTED = "#7a8099"
 BORDER = "#2a2f3b"
@@ -39,6 +41,13 @@ QMessageBox QPushButton {{
     padding:6px 18px; font-size:12px; min-width:60px;
 }}
 QMessageBox QPushButton:hover {{ background:#2e4a7a; }}
+"""
+
+CONTEXT_MENU_STYLE = f"""
+QMenu {{ background:{PANEL}; color:{TEXT}; border:1px solid {BORDER}; padding:4px; }}
+QMenu::item {{ padding:6px 20px; border-radius:4px; }}
+QMenu::item:selected {{ background:#253a5a; }}
+QMenu::separator {{ height:1px; background:{BORDER}; margin:4px 8px; }}
 """
 
 
@@ -73,6 +82,10 @@ class MainWindow(QMainWindow):
         self._settings = load_config()
 
         self._settings_win = None
+
+        self._measuring = False
+        self._measure_points: list = []  # [(lon, lat), ...]
+
 
         self._build_ui()
 
@@ -126,6 +139,8 @@ class MainWindow(QMainWindow):
         self.map_widget.sig_map_clicked.connect(self._on_map_clicked)
         self.map_widget.sig_gw_dragged.connect(self._on_gw_dragged)
         self.map_widget.sig_nd_dragged.connect(self._on_node_dragged)
+        self.map_widget.sig_map_right_clicked.connect(self._on_map_right_clicked)
+        
 
     # ── 목록 창 ──────────────────────────────────────────────
 
@@ -378,7 +393,19 @@ class MainWindow(QMainWindow):
     # ── 지도 이벤트 ──────────────────────────────────────────
 
     def _on_map_clicked(self, lon, lat):
-        self.status_label.setText(f"클릭: ({lon:.5f}, {lat:.5f})")
+        """
+        지도 좌클릭임. 측정 모드 중이면 측정점으로 추가하고, 아니면 그냥 좌표만 상태바에 표시함.
+        """
+        if self._measuring:
+            self._measure_points.append((lon, lat))
+            self.map_widget.refresh(
+                gws=self.gateways, nodes=self.nodes, result=self.last_result,
+                measure_pts=self._measure_points,
+            )
+            self.status_label.setText(f"측정점 추가: ({lat:.5f}, {lon:.5f}) — 총 {len(self._measure_points)}개")
+        else:
+            self.status_label.setText(f"클릭: ({lon:.5f}, {lat:.5f})")
+
 
     def _on_gw_dragged(self, gw_id, lon, lat):
         """
@@ -404,3 +431,131 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self, new_settings: dict):
         self._settings.update(new_settings)
         self.status_label.setText("분석 설정이 갱신되었습니다.")
+
+
+    # ── 우클릭 컨텍스트 메뉴 ──────────────────────────────────
+
+    def _on_map_right_clicked(self, lon, lat):
+        """
+        지도 우클릭임. 클릭한 위치(lat, lon)를 기준으로 메뉴를 띄움 - GW/단말 추가,
+        분석 실행, 거리측정 시작/초기화, 좌표 복사(일반 형식/GeoJSON 형식)를 지원함.
+        """
+        menu = QMenu(self)
+        menu.setStyleSheet(CONTEXT_MENU_STYLE)
+
+        header = menu.addAction(f"📍 {lat:.5f}, {lon:.5f}")
+        header.setEnabled(False)  # 좌표 표시용 - 클릭해도 아무 동작 안 함
+        menu.addSeparator()
+
+        act_add_gw = menu.addAction("➕ 이 위치에 GW 추가")
+        act_add_node = menu.addAction("➕ 이 위치에 단말 추가")
+        menu.addSeparator()
+
+        act_run_optimize = menu.addAction("📊 커버리지 분석 실행")
+        act_run_heatmap = menu.addAction("🗺️ 히트맵 계산")
+        menu.addSeparator()
+
+        if self._measuring:
+            act_measure = menu.addAction("📏 거리 측정에 이 점 추가")
+            act_measure_reset = menu.addAction("✕ 측정 초기화")
+        else:
+            act_measure = menu.addAction("📏 거리 측정 시작")
+            act_measure_reset = None
+        menu.addSeparator()
+
+        act_copy_coord = menu.addAction("📋 좌표 복사")
+        act_copy_geojson = menu.addAction("📋 GeoJSON 좌표 복사")
+
+        chosen = menu.exec_(QCursor.pos())
+
+        if chosen == act_add_gw:
+            self._add_gw_at(lat, lon)
+        elif chosen == act_add_node:
+            self._add_node_at(lat, lon)
+        elif chosen == act_run_optimize:
+            self._on_optimize_clicked()
+        elif chosen == act_run_heatmap:
+            self._run_heatmap_for_all_enabled()
+        elif chosen == act_measure:
+            self._add_measure_point(lat, lon)
+        elif act_measure_reset is not None and chosen == act_measure_reset:
+            self._reset_measurement()
+        elif chosen == act_copy_coord:
+            self._copy_coordinates(lat, lon)
+        elif chosen == act_copy_geojson:
+            self._copy_geojson_coordinates(lat, lon)
+
+    def _add_gw_at(self, lat: float, lon: float):
+        """클릭한 위치에 기본값 GW를 새로 추가함."""
+        from lorascape.data.schema import GatewaySite
+        new_gw = GatewaySite(
+            gw_id=f"RCLICK_GW_{len(self.gateways) + 1}",
+            region="", location_desc="",
+            lat=lat, lon=lon,
+            install_type="지도에서 추가", power_source="",
+        )
+        self.gateways.append(new_gw)
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        self.status_label.setText(f"GW 추가됨: {new_gw.gw_id} ({lat:.5f}, {lon:.5f})")
+
+    def _add_node_at(self, lat: float, lon: float):
+        """클릭한 위치에 기본값 Node를 새로 추가함."""
+        from lorascape.data.schema import NodeSite
+        new_node = NodeSite(
+            node_id=f"RCLICK_NODE_{len(self.nodes) + 1}",
+            region="", location_desc="",
+            lat=lat, lon=lon,
+            device_type="지도에서 추가", install_type="지도에서 추가",
+        )
+        self.nodes.append(new_node)
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+        if self._node_list_win is not None:
+            self._node_list_win.set_nodes(self.nodes)
+        self.status_label.setText(f"Node 추가됨: {new_node.node_id} ({lat:.5f}, {lon:.5f})")
+
+    def _run_heatmap_for_all_enabled(self):
+        """
+        컨텍스트 메뉴의 '히트맵 계산'임. GW목록창에서 개별 선택하는 것과 달리,
+        여기서는 활성화된(enabled) GW 전체를 대상으로 계산함 - 지도에서 바로
+        실행할 땐 특정 GW를 미리 고를 방법이 없어서, 활성 GW 전체가 합리적인 기본값임.
+        """
+        enabled_ids = [g.gw_id for g in self.gateways if g.enabled]
+        if not enabled_ids:
+            _styled_message_box(self, QMessageBox.Information, "알림", "활성화된 GW가 없습니다.").exec_()
+            return
+        self._on_selected_coverage_requested(enabled_ids)
+
+    def _copy_coordinates(self, lat: float, lon: float):
+        """위도,경도 순서(일반적인 표기)로 클립보드에 복사함."""
+        QApplication.clipboard().setText(f"{lat:.6f}, {lon:.6f}")
+        self.status_label.setText(f"좌표 복사됨: {lat:.6f}, {lon:.6f}")
+
+    def _copy_geojson_coordinates(self, lat: float, lon: float):
+        """GeoJSON 표준 순서(경도,위도)로 클립보드에 복사함 - 일반 표기와 순서가 반대라 헷갈리기 쉬워서 별도 메뉴로 분리함."""
+        QApplication.clipboard().setText(f"{lon:.6f}, {lat:.6f}")
+        self.status_label.setText(f"GeoJSON 좌표 복사됨: {lon:.6f}, {lat:.6f}")
+
+    # ── 거리 측정 ────────────────────────────────────────────
+
+    def _add_measure_point(self, lat: float, lon: float):
+        """
+        측정 시작(또는 이미 측정 중이면 점 추가)임. 이후 지도를 일반 좌클릭하면
+        _on_map_clicked이 self._measuring 플래그를 보고 자동으로 점을 계속 추가함.
+        """
+        self._measuring = True
+        self._measure_points.append((lon, lat))
+        self.map_widget.refresh(
+            gws=self.gateways, nodes=self.nodes, result=self.last_result,
+            measure_pts=self._measure_points,
+        )
+        self.status_label.setText(
+            f"거리 측정 중 — 지도를 클릭해서 점을 추가하세요 (현재 {len(self._measure_points)}개)"
+        )
+
+    def _reset_measurement(self):
+        self._measuring = False
+        self._measure_points = []
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+        self.status_label.setText("측정 초기화됨")

@@ -87,9 +87,9 @@ def test_settings_window_grid_size_combo_has_all_presets(qapp, isolated_config):
     assert win.cb_grid_size.count() == len(HEATMAP_GRID_SIZE_PRESETS)
 
 
-def test_settings_window_grid_size_defaults_to_40(qapp, isolated_config):
+def test_settings_window_grid_size_defaults_to_60(qapp, isolated_config):
     win = SettingsWindow()
-    assert win.cb_grid_size.currentData() == 40
+    assert win.cb_grid_size.currentData() == 60
 
 
 def test_settings_window_grid_size_collected_and_saved(qapp, isolated_config):
