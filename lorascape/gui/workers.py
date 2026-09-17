@@ -81,11 +81,11 @@ class OptimizeWorker(QObject):
 class HeatmapWorker(QObject):
     """
     선택된 GW들의 커버리지 히트맵을 백그라운드에서 계산하는 워커임.
-    GW 1개당 격자 계산이 몇 초~몇십 초 걸릴 수 있어서(grid_size에 따라 다름),
-    여러 GW를 동시에 계산하면 그만큼 더 오래 걸림 - 메인 스레드 블로킹 방지용.
+    progress 시그널은 이제 '격자 셀 단위'로 갱신됨 - GW 단위로만 하면 GW가
+    1개뿐일 때 진행률이 0%에 멈춰있는 것처럼 보이는 문제가 있었음.
     """
-    finished = pyqtSignal(list)  # list[dict] - build_heatmap_layer_dict 결과들
-    progress = pyqtSignal(int, str)  # (진행률 0~100, 메시지)
+    finished = pyqtSignal(list)
+    progress = pyqtSignal(int, str)
     error = pyqtSignal(str)
 
     def __init__(self, gateways: list, dem_path: str, grid_size: int = 40,
@@ -104,23 +104,34 @@ class HeatmapWorker(QObject):
 
             multi_gw = len(self.gateways) > 1
             layers = []
+            n_gws = len(self.gateways)
 
             with DemLoader(self.dem_path) as dem:
                 for idx, gw in enumerate(self.gateways):
-                    pct = int((idx / max(len(self.gateways), 1)) * 100)
-                    self.progress.emit(pct, f"{gw.gw_id} 커버리지 계산 중... ({idx+1}/{len(self.gateways)})")
+
+                    def _on_cell_progress(done_cells, total_cells, _idx=idx, _gw=gw):
+                        # 이 GW 하나의 진행률(0~1)을 전체 GW 목록 기준 구간으로 환산함.
+                        # 예: GW 2개 중 첫 번째 GW가 50%까지 갔으면 전체는 (0 + 0.5)/2 = 25%
+                        gw_local_ratio = done_cells / total_cells
+                        overall_ratio = (_idx + gw_local_ratio) / n_gws
+                        pct = int(overall_ratio * 100)
+                        self.progress.emit(
+                            pct, f"{_gw.gw_id} 커버리지 계산 중... ({_idx+1}/{n_gws}, 셀 {done_cells}/{total_cells})"
+                        )
 
                     grid = compute_gw_heatmap_grid(
                         gw, dem,
                         radius_km=self.radius_km, grid_size=self.grid_size,
                         fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
                         environment=self.analysis_settings.get("environment", "urban"),
+                        progress_callback=_on_cell_progress,
                     )
 
                     base_color = get_gw_color(idx) if multi_gw else None
                     layer = build_heatmap_layer_dict(grid, base_color=base_color)
                     layers.append(layer)
 
+            self.progress.emit(100, "완료")
             self.finished.emit(layers)
         except Exception as e:
             self.error.emit(str(e))

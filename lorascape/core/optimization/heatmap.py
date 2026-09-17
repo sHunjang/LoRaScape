@@ -40,6 +40,7 @@ def compute_gw_heatmap_grid(
     fc_mhz: float = 920.0,
     environment: str = "urban",
     n_profile_samples: int = 10,
+    progress_callback=None,
 ) -> HeatmapGrid:
     """
     GW 하나를 중심으로 radius_km 반경의 정사각형 영역을 grid_size x grid_size
@@ -65,6 +66,7 @@ def compute_gw_heatmap_grid(
     lon_grid, lat_grid = np.meshgrid(lons, lats)
 
     pr_grid = np.full((grid_size, grid_size), -999.0)
+    total_cells = grid_size * grid_size
 
     for i in range(grid_size):
         for j in range(grid_size):
@@ -72,7 +74,7 @@ def compute_gw_heatmap_grid(
             d_km = distance_m(gw.lat, gw.lon, lat, lon) / 1000.0
 
             if d_km < 0.01:
-                d_km = 0.01  # GW 바로 위 지점(거리 0)은 log10(0) 방지용 최소값
+                d_km = 0.01
 
             base_pl = song_path_loss(fc_mhz, gw.antenna_height_m, node_antenna_height_m, d_km, environment)
 
@@ -89,6 +91,13 @@ def compute_gw_heatmap_grid(
                 total_pl, 0.0, 0.0,
             )
             pr_grid[i, j] = pr
+
+            if progress_callback is not None:
+                done = i * grid_size + j + 1
+                # 매 셀마다 부르면 신호가 너무 잦아서(특히 grid_size가 클 때) 워커-메인스레드
+                # 시그널 오버헤드가 커질 수 있어서, 10셀마다(또는 마지막 셀) 한 번만 알림
+                if done % 10 == 0 or done == total_cells:
+                    progress_callback(done, total_cells)
 
     return HeatmapGrid(
         gw_id=gw.gw_id,

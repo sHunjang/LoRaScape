@@ -73,3 +73,25 @@ def test_heatmap_grid_signal_decreases_with_distance_monotonically_along_axis():
     center_row = grid.pr_grid[5, 5:]  # 중앙에서 오른쪽 끝까지
     diffs = np.diff(center_row)
     assert (diffs <= 1e-6).all()  # 갈수록 값이 커지면 안 됨(강해지면 안 됨) - 단조 감소(또는 동일) 확인
+    
+    
+def test_heatmap_grid_progress_callback_called_with_final_completion():
+    gw = _make_gw("GW1", 37.40, 127.12)
+    dem = FakeFlatDem()
+    calls = []
+
+    compute_gw_heatmap_grid(
+        gw, dem, radius_km=1.0, grid_size=10,
+        progress_callback=lambda done, total: calls.append((done, total)),
+    )
+
+    assert calls  # 최소 한 번은 호출돼야 함
+    assert calls[-1] == (100, 100)  # 마지막 호출은 반드시 (전체, 전체)여야 함 (100% 도달 보장)
+
+
+def test_heatmap_grid_progress_callback_not_called_when_none():
+    gw = _make_gw("GW1", 37.40, 127.12)
+    dem = FakeFlatDem()
+    # progress_callback=None이 기본값이라, 그냥 호출해서 에러 안 나는지만 확인함
+    grid = compute_gw_heatmap_grid(gw, dem, radius_km=1.0, grid_size=10)
+    assert grid is not None

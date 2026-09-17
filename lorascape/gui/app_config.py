@@ -22,8 +22,8 @@ DEFAULT_CONFIG = {
     "environment": "urban",
     "coverage_target": 0.9,
     "max_additional": 15,
-    "heatmap_opacity": 0.85,
-    "heatmap_grid_size": 40,
+    "heatmap_opacity": 1,
+    "heatmap_grid_size": 60,
 }
 
 
@@ -36,6 +36,7 @@ HEATMAP_GRID_SIZE_PRESETS = [
     (60, "60 x 60 (정밀, 느림)"),
     (80, "80 x 80 (매우 정밀, 매우 느림)"),
     (100, "100 x 100 (최고 정밀, 최고 느림)"),
+    (150, "150 x 150 (초정밀, 수 분 이상 소요될 수 있음)"),
 ]
 
 

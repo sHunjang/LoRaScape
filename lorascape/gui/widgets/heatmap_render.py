@@ -11,7 +11,9 @@ dBm -> 색상 매핑은 legend_window.py 참고 파일의 기본 구간(PR_COLOR
 import base64
 import io
 import numpy as np
+
 from PIL import Image
+from scipy.ndimage import zoom
 
 from lorascape.core.optimization.heatmap import HeatmapGrid
 
@@ -81,20 +83,36 @@ def _pr_to_alpha(pr: float) -> int:
         return 0  # 커버리지 없음 - 완전 투명
 
 
-def render_heatmap_image(grid: HeatmapGrid, color_levels=None, base_color: tuple = None) -> np.ndarray:
+def render_heatmap_image(
+    grid: HeatmapGrid, color_levels=None, base_color: tuple = None, smooth_factor: int = 4,
+) -> np.ndarray:
     """
     HeatmapGrid를 (H, W, 4) uint8 RGBA numpy 배열로 변환함.
+
+    smooth_factor: pr_grid를 이 배수만큼 업샘플링하면서 부드럽게(bilinear 유사)
+    보간함. 예를 들어 40x40 격자에 smooth_factor=4를 적용하면 160x160으로
+    커지면서 픽셀 경계가 부드러운 곡선처럼 보임 - 원본 계산은 그대로 40x40이라
+    계산 비용은 늘지 않고, 시각적으로만 매끄러워짐 (딱딱한 계단 현상 해결).
+    smooth_factor=1을 주면 보간 안 하고 원본 그대로 씀 (디버깅용).
 
     base_color가 주어지면(다중 GW 모드): 그 색상 고정 + pr값에 따라 알파(투명도)만
     다르게 해서, GW별로 색조가 구분되게 함.
     base_color가 None이면(단일 GW 모드): 기존처럼 dBm 구간별 5색 그라데이션(빨강~파랑)을 씀.
     """
-    rows, cols = grid.pr_grid.shape
+    pr_grid = grid.pr_grid
+    if smooth_factor > 1:
+        # order=3(bicubic 유사)로 부드럽게 보간함. -999(범위 밖 값) 같은 극단값이
+        # 보간 과정에서 주변 셀에 이상하게 번지는 걸 막기 위해, 먼저 -999를
+        # 실제 최소 신호값 근처로 클리핑한 다음 보간함.
+        clipped = np.clip(pr_grid, -140, None)
+        pr_grid = zoom(clipped, smooth_factor, order=3)
+
+    rows, cols = pr_grid.shape
     rgba = np.zeros((rows, cols, 4), dtype=np.uint8)
 
     for i in range(rows):
         for j in range(cols):
-            pr = grid.pr_grid[i, j]
+            pr = pr_grid[i, j]
             if base_color is not None:
                 alpha = _pr_to_alpha(pr)
                 rgba[i, j] = (*base_color, alpha)
@@ -117,7 +135,9 @@ def to_data_uri(rgba_image: np.ndarray) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def build_heatmap_layer_dict(grid: HeatmapGrid, color_levels=None, base_color: tuple = None) -> dict:
+def build_heatmap_layer_dict(
+    grid: HeatmapGrid, color_levels=None, base_color: tuple = None, smooth_factor: int = 4,
+) -> dict:
     """
     map_layers.add_heatmap_layers()가 기대하는 형태({'gw_id', 'url', 'bounds'})로
     조립해서 반환함. main_window가 이 함수 결과를 그대로 refresh(heatmaps=[...])에
@@ -126,11 +146,10 @@ def build_heatmap_layer_dict(grid: HeatmapGrid, color_levels=None, base_color: t
     base_color가 주어지면(다중 GW 모드): render_heatmap_image에 그대로 전달해서
     GW별로 색조가 구분되게 함.
     """
-    rgba = render_heatmap_image(grid, color_levels, base_color)
+    rgba = render_heatmap_image(grid, color_levels, base_color, smooth_factor)
     data_uri = to_data_uri(rgba)
 
     lat_min, lat_max, lon_min, lon_max = grid.bounds
-    # folium ImageOverlay의 bounds는 [[lat_min, lon_min], [lat_max, lon_max]] 형태임
     bounds = [[lat_min, lon_min], [lat_max, lon_max]]
 
     return {

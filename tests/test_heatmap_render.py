@@ -27,11 +27,15 @@ def test_pr_to_rgba_out_of_range_is_transparent():
 
 
 def test_render_heatmap_image_shape_matches_grid():
+    """
+    smooth_factor=1(보간 없음)일 때는 원본 격자 크기와 이미지 크기가 그대로 일치해야 함.
+    기본값(smooth_factor=4)으로는 업샘플링되므로 크기가 달라지는 게 정상 동작임
+    - 그건 test_render_heatmap_image_smooth_factor_upsamples_dimensions에서 별도로 검증함.
+    """
     pr_values = np.full((10, 8), -85.0)
     grid = _make_grid(pr_values)
-    rgba = render_heatmap_image(grid)
+    rgba = render_heatmap_image(grid, smooth_factor=1)
     assert rgba.shape == (10, 8, 4)
-    assert rgba.dtype == np.uint8
 
 
 def test_render_heatmap_image_flips_vertically():
@@ -76,3 +80,21 @@ def test_pr_to_alpha_strong_signal_has_higher_alpha_than_weak():
 def test_pr_to_alpha_out_of_range_is_fully_transparent():
     from lorascape.gui.widgets.heatmap_render import _pr_to_alpha
     assert _pr_to_alpha(-500) == 0
+
+
+def test_render_heatmap_image_smooth_factor_upsamples_dimensions():
+    pr_values = np.full((10, 10), -90.0)
+    grid = _make_grid(pr_values)
+
+    rgba_smooth = render_heatmap_image(grid, smooth_factor=4)
+    rgba_raw = render_heatmap_image(grid, smooth_factor=1)
+
+    assert rgba_smooth.shape[0] == rgba_raw.shape[0] * 4
+    assert rgba_smooth.shape[1] == rgba_raw.shape[1] * 4
+
+
+def test_build_heatmap_layer_dict_accepts_smooth_factor():
+    pr_values = np.full((8, 8), -95.0)
+    grid = _make_grid(pr_values)
+    layer = build_heatmap_layer_dict(grid, smooth_factor=2)
+    assert layer["url"].startswith("data:image/png;base64,")

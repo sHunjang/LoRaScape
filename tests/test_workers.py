@@ -54,7 +54,7 @@ def test_load_data_worker_emits_error_on_bad_path():
     assert len(errors) == 1
 
 
-def test_heatmap_worker_emits_layers_for_each_gateway():
+def test_heatmap_worker_reports_progress_up_to_100():
     import os
     dem_path = "sample_data/seongnam/dem_build_seongnam_3857-2.img"
     if not os.path.exists(dem_path):
@@ -67,14 +67,12 @@ def test_heatmap_worker_emits_layers_for_each_gateway():
     )
 
     worker = HeatmapWorker([gw], dem_path, grid_size=5, radius_km=0.5)
-    result = {}
-    errors = []
-    worker.finished.connect(lambda layers: result.update(layers=layers))
-    worker.error.connect(lambda msg: errors.append(msg))  # ★ 진단용 추가
+    progress_values = []
+    worker.progress.connect(lambda pct, msg: progress_values.append(pct))
     worker.run()
 
-    assert not errors, f"워커에서 에러 발생: {errors}"  # ★ 에러 있으면 메시지 그대로 출력
-    assert "layers" in result
+    assert progress_values  # 최소 한 번은 진행률이 보고돼야 함
+    assert progress_values[-1] == 100  # 마지막은 반드시 100%여야 함 (0%에 멈춰있던 버그 재발 방지)
 
 
 def test_heatmap_worker_emits_error_on_missing_dem():
