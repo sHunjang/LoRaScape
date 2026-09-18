@@ -9,14 +9,20 @@
   - 인증코드 비교 전에 반드시 normalize.py로 양쪽 다 정규화해서 비교함
     (이게 문서 5번 요구사항의 핵심 - 붙여넣기 실패 재발 방지)
   - 디버그 모드에서는 실패 시 입력값/기대값을 나란히 로그로 남김 (배포판에서는 숨김)
+
+★ generate_auth_code는 issuer_core.py에서 그대로 가져다 씀 (재수출) - 발급
+로직(licenser_tool)과 검증 로직(본체)이 같은 알고리즘을 반드시 써야 하는데,
+예전엔 이 파일에 직접 구현되어 있어서 issuer_core.py와 따로 관리되다가
+알고리즘이 갈라질 위험이 있었음. 지금은 issuer_core.py 하나로 합쳐서
+양쪽 다 그 함수를 참조함.
 """
-import hashlib
 import hmac
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from lorascape.license.normalize import normalize_code, normalize_name
+from lorascape.license.issuer_core import generate_auth_code  # noqa: F401 (호환성 유지용 재수출)
 
 logger = logging.getLogger("lorascape.license")
 
@@ -52,26 +58,6 @@ def load_secret_key(key_file_path: str) -> bytes:
         raise ValueError(f"라이선스 키 파일이 비어있음: {key_file_path}")
 
     return content.encode("utf-8")
-
-
-def generate_auth_code(secret_key: bytes, company_name: str) -> str:
-    """
-    회사명을 기반으로 인증코드를 생성함 (발급 프로그램(licenser_tool)에서 이 함수를 씀).
-
-    HMAC-SHA256으로 서명하고, 사람이 읽고 옮겨적기 편하게 대문자 hex 앞부분만 잘라서 씀
-    (전체 hex 다 쓰면 64자라 너무 길어서 - 32자 정도면 충돌 가능성 낮으면서도 다루기 편함).
-
-    normalize_name을 먼저 적용하는 이유: 발급 시점에 회사명 표기가 살짝 달라도
-    (예: "성남시 " vs "성남시") 같은 코드가 나오게 하려고 - 발급/인증 양쪽에서
-    반드시 이 순서(정규화 먼저, 그다음 서명)를 지켜야 함.
-    """
-    normalized_name = normalize_name(company_name)
-    signature = hmac.new(secret_key, normalized_name.encode("utf-8"), hashlib.sha256)
-    raw_code = signature.hexdigest().upper()[:32]
-
-    # 사람이 읽기 편하게 8자리씩 하이픈으로 끊어줌 (예: ABCD1234-EFGH5678-...)
-    # 하이픈은 어차피 normalize_code에서 제거되니까 인증 비교에는 영향 없음 - 순전히 가독성용.
-    return "-".join(raw_code[i:i + 8] for i in range(0, len(raw_code), 8))
 
 
 def verify_auth_code(

@@ -14,3 +14,8 @@ sample_data/
 
 .vscode/
 .idea/
+
+
+# 라이선스 발급 도구의 민감 데이터 - 절대 커밋 금지
+licenser_tool/keys/
+licenser_tool/issue_history.json
