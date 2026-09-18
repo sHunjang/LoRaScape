@@ -2,39 +2,50 @@
 """
 LoRaScape 앱 실행 진입점임.
 
-흐름: 초기설정창(Shapefile/DEM 선택) -> 스플래시(START 클릭) -> 데이터 검증 로딩 -> 메인윈도우
+흐름: 라이선스 인증(조용한 재검증 우선, 실패 시 다이얼로그) -> 초기설정창(Shapefile/DEM 선택)
+     -> 스플래시(START 클릭) -> 데이터 검증 로딩 -> 메인윈도우
 """
 import os
 import sys
 from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
-from lorascape.gui.main_window import MainWindow, _styled_message_box, MESSAGEBOX_STYLE
+from lorascape.gui.main_window import MainWindow, _styled_message_box
 from lorascape.gui.widgets.initial_setup_dialog import InitialSetupDialog
 from lorascape.gui.widgets.splash_screen import SplashScreen
+from lorascape.gui.widgets.license_dialog import LicenseDialog, try_silent_login
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lorascape", "gui", "assets")
+
+
+def _ensure_licensed(app) -> bool:
+    """
+    라이선스 인증을 확인함. 저장된 값으로 조용히 재검증되면 다이얼로그 없이
+    바로 True를 반환하고, 안 되면 LicenseDialog를 띄워서 사용자가 인증할
+    때까지 재시도 기회를 줌 (취소하면 False - 앱 종료).
+    """
+    if try_silent_login():
+        return True
+
+    dialog = LicenseDialog()
+    return dialog.exec_() == QDialog.Accepted
 
 
 def main():
     app = QApplication(sys.argv)
 
-    # 1) 초기설정창 - Shapefile/DEM 선택
+    if not _ensure_licensed(app):
+        sys.exit(0)  # 인증 취소 시 조용히 종료함
+
     setup = InitialSetupDialog()
     if setup.exec_() != QDialog.Accepted:
         sys.exit(0)
     paths = setup.get_paths()
 
-    # 2) 스플래시 - START 클릭 대기
     splash = SplashScreen(assets_dir=ASSETS_DIR)
-    main_window_holder = {}  # 클로저에서 MainWindow 참조를 들고 있기 위한 컨테이너
+    main_window_holder = {}
 
     def _on_splash_start():
-        """
-        START 클릭 -> 진행바 단계별 갱신하며 데이터 유효성 확인 -> MainWindow 생성 -> 페이드아웃.
-        무거운 계산(엑셀/DEM 실제 로딩)은 MainWindow가 뜬 뒤 사용자가 목록창에서
-        직접 불러오는 구조라, 여기서는 파일 존재 여부/DEM 오픈 가능 여부 정도만 검증함.
-        """
         splash.update_progress(20, "지역 경계 파일 확인 중...")
         if not os.path.exists(paths["shp_path"]):
             _fail(f"Shapefile을 찾을 수 없습니다: {paths['shp_path']}")
@@ -44,7 +55,7 @@ def main():
         try:
             from lorascape.data.dem_loader import DemLoader
             with DemLoader(paths["dem_path"]) as dem:
-                pass  # 열리는지만 확인 - 실제 사용은 계산 시점에 다시 엶
+                pass
         except Exception as e:
             _fail(f"DEM 파일을 여는 중 오류가 발생했습니다:\n{e}")
             return

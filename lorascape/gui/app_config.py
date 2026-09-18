@@ -24,6 +24,9 @@ DEFAULT_CONFIG = {
     "max_additional": 15,
     "heatmap_opacity": 1,
     "heatmap_grid_size": 40,
+    "license_company": "",
+    "license_user": "",
+    "license_code": "",
 }
 
 

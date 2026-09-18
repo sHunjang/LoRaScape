@@ -34,6 +34,11 @@ def load_secret_key(key_file_path: str) -> bytes:
     """
     exe 옆의 license.key 파일에서 비밀키를 읽어옴.
     파일이 없거나 비어있으면 명확한 에러를 던짐 (조용히 넘어가면 나중에 디버깅 지옥이라서).
+
+    ★ 버그 수정: 인코딩을 "utf-8"로 읽으면 Windows PowerShell(Out-File -Encoding utf8)이
+    파일 앞에 붙이는 BOM(\ufeff) 문자를 걸러내지 못해서, 비밀키 값이 미묘하게 달라져
+    HMAC 서명 자체가 틀어지는 문제가 있었음. "utf-8-sig"로 읽으면 BOM이 있으면
+    자동으로 제거하고, 없으면 그냥 일반 UTF-8처럼 동작해서 양쪽 다 안전함.
     """
     path = Path(key_file_path)
     if not path.exists():
@@ -42,8 +47,7 @@ def load_secret_key(key_file_path: str) -> bytes:
             f"(exe와 같은 폴더에 license.key가 있는지 확인 필요)"
         )
 
-    # 키 파일도 사람이 만지다가 앞뒤 공백/개행이 섞일 수 있어서 strip 처리함
-    content = path.read_text(encoding="utf-8").strip()
+    content = path.read_text(encoding="utf-8-sig").strip()
     if not content:
         raise ValueError(f"라이선스 키 파일이 비어있음: {key_file_path}")
 
