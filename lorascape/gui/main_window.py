@@ -83,6 +83,8 @@ class MainWindow(QMainWindow):
 
         self._distance_win = None
 
+        self._profile_win = None
+
         self._settings_win = None
 
         self._measuring = False
@@ -110,12 +112,14 @@ class MainWindow(QMainWindow):
         act_node_list = QAction("단말 목록", self)
         act_optimize = QAction("GW 배치 검증 및 보강", self)
         act_distance = QAction("거리 분석", self)
+        act_profile = QAction("단면도", self)
         act_settings = QAction("설정", self)
 
         act_gw_list.triggered.connect(self._open_gw_list)
         act_node_list.triggered.connect(self._open_node_list)
         act_optimize.triggered.connect(self._on_optimize_clicked)
         act_distance.triggered.connect(self._open_distance_window)
+        act_profile.triggered.connect(self._open_profile_window)
         act_settings.triggered.connect(self._open_settings)
 
         tb.addAction(act_gw_list)
@@ -123,6 +127,7 @@ class MainWindow(QMainWindow):
         tb.addAction(act_optimize)
         tb.addAction(act_distance)
         tb.addAction(act_settings)
+        tb.addAction(act_profile)
 
         splitter = QSplitter(Qt.Horizontal)
         self.map_widget = MapWidget()
@@ -464,6 +469,9 @@ class MainWindow(QMainWindow):
         act_distance = menu.addAction("📏 GW-Node 거리 분석")
         
         act_run_heatmap = menu.addAction("🗺️ 히트맵 계산")
+        
+        act_profile = menu.addAction("📉 지형 단면도")
+        
         menu.addSeparator()
 
         if self._measuring:
@@ -497,6 +505,8 @@ class MainWindow(QMainWindow):
             self._copy_geojson_coordinates(lat, lon)
         elif chosen == act_distance:
             self._open_distance_window()            
+        elif chosen == act_profile:
+            self._open_profile_window()
 
 
     def _add_gw_at(self, lat: float, lon: float):
@@ -601,3 +611,26 @@ class MainWindow(QMainWindow):
             self._distance_win.set_data(self.gateways, self.nodes, self.last_result)
         self._distance_win.show()
         self._distance_win.raise_()
+        
+
+    def _open_profile_window(self):
+        from lorascape.gui.widgets.profile_window import ProfileWindow
+        if not self.gateways or not self.nodes:
+            _styled_message_box(self, QMessageBox.Information, "알림", "GW와 Node가 모두 있어야 합니다.").exec_()
+            return
+        if not self.dem_path:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
+            return
+
+        from lorascape.data.dem_loader import DemLoader
+        # ProfileWindow가 살아있는 동안 DEM을 계속 조회해야 해서, 워커처럼 with문으로
+        # 바로 닫지 않고 창과 함께 들고 있음 - 창 닫힐 때 명시적으로 닫아줌.
+        dem = DemLoader(self.dem_path)
+
+        if self._profile_win is None:
+            self._profile_win = ProfileWindow(self.gateways, self.nodes, dem, fc_mhz=self._settings.get("fc_mhz", 920.0), parent=self)
+            self._profile_win.finished.connect(lambda _: dem.close())
+        else:
+            self._profile_win.set_data(self.gateways, self.nodes, dem)
+        self._profile_win.show()
+        self._profile_win.raise_()
