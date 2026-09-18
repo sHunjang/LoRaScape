@@ -81,6 +81,8 @@ class MainWindow(QMainWindow):
 
         self._settings = load_config()
 
+        self._distance_win = None
+
         self._settings_win = None
 
         self._measuring = False
@@ -107,16 +109,19 @@ class MainWindow(QMainWindow):
         act_gw_list = QAction("GW 목록", self)
         act_node_list = QAction("단말 목록", self)
         act_optimize = QAction("GW 배치 검증 및 보강", self)
+        act_distance = QAction("거리 분석", self)
         act_settings = QAction("설정", self)
 
         act_gw_list.triggered.connect(self._open_gw_list)
         act_node_list.triggered.connect(self._open_node_list)
         act_optimize.triggered.connect(self._on_optimize_clicked)
+        act_distance.triggered.connect(self._open_distance_window)
         act_settings.triggered.connect(self._open_settings)
 
         tb.addAction(act_gw_list)
         tb.addAction(act_node_list)
         tb.addAction(act_optimize)
+        tb.addAction(act_distance)
         tb.addAction(act_settings)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -455,6 +460,9 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         act_run_optimize = menu.addAction("📊 커버리지 분석 실행")
+        
+        act_distance = menu.addAction("📏 GW-Node 거리 분석")
+        
         act_run_heatmap = menu.addAction("🗺️ 히트맵 계산")
         menu.addSeparator()
 
@@ -487,6 +495,9 @@ class MainWindow(QMainWindow):
             self._copy_coordinates(lat, lon)
         elif chosen == act_copy_geojson:
             self._copy_geojson_coordinates(lat, lon)
+        elif chosen == act_distance:
+            self._open_distance_window()            
+
 
     def _add_gw_at(self, lat: float, lon: float):
         """클릭한 위치에 기본값 GW를 새로 추가함."""
@@ -577,3 +588,16 @@ class MainWindow(QMainWindow):
             self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
         except Exception as e:
             self.status_label.setText(f"DEM 범위 자동 설정 실패 (지도 기본 범위 사용): {e}")
+            
+            
+    def _open_distance_window(self):
+        from lorascape.gui.widgets.distance_window import DistanceWindow
+        if not self.gateways:
+            _styled_message_box(self, QMessageBox.Information, "알림", "GW가 없습니다. 먼저 데이터를 불러오거나 추가하세요.").exec_()
+            return
+        if self._distance_win is None:
+            self._distance_win = DistanceWindow(self.gateways, self.nodes, self.last_result, parent=self)
+        else:
+            self._distance_win.set_data(self.gateways, self.nodes, self.last_result)
+        self._distance_win.show()
+        self._distance_win.raise_()
