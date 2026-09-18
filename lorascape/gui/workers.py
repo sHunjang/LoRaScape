@@ -135,3 +135,83 @@ class HeatmapWorker(QObject):
             self.finished.emit(layers)
         except Exception as e:
             self.error.emit(str(e))
+            
+
+class SuggestAdditionalGWWorker(QObject):
+    """
+    기존 GW+Node로 커버리지를 검증하고, 부족하면 추가 설치 후보를 '제안'만 하는 워커임.
+    evaluate_and_augment를 그대로 쓰되, 결과에서 기존 GW와 새로 제안된 GW를
+    구분해서 반환함 - 자동으로 GW 목록에 반영하지 않고, 사용자가 검토 후
+    선택적으로 승인하게 하려는 목적임 (기존 '검증 및 보강' 버튼과의 차이점).
+    """
+    finished = pyqtSignal(object, list)  # (OptimizationResult, list[GatewaySite] 새로 제안된 GW만)
+    error = pyqtSignal(str)
+
+    def __init__(self, dem_path: str, nodes: list, existing_gateways: list,
+                 max_additional: int, coverage_target: float, analysis_settings: dict = None):
+        super().__init__()
+        self.dem_path = dem_path
+        self.nodes = nodes
+        self.existing_gateways = existing_gateways
+        self.max_additional = max_additional
+        self.coverage_target = coverage_target
+        self.analysis_settings = analysis_settings or {}
+
+    def run(self):
+        try:
+            from lorascape.core.optimization.gw_placement import evaluate_and_augment
+            existing_ids = {gw.gw_id for gw in self.existing_gateways}
+
+            with DemLoader(self.dem_path) as dem:
+                result = evaluate_and_augment(
+                    self.nodes, self.existing_gateways, dem,
+                    max_additional=self.max_additional,
+                    coverage_target=self.coverage_target,
+                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
+                    environment=self.analysis_settings.get("environment", "urban"),
+                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
+                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                )
+
+            # 결과의 gateways 중 기존 목록에 없던 것만 '새로 제안된 것'으로 분리함
+            suggested = [gw for gw in result.gateways if gw.gw_id not in existing_ids]
+            self.finished.emit(result, suggested)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class SuggestGreenfieldGWWorker(QObject):
+    """
+    GW가 하나도 없는 상태에서, Node 위치만 보고 처음부터 GW 배치를 새로 추천하는 워커임.
+    기존 GW는 완전히 무시함(그린필드) - optimize_gw_placement를 그대로 씀
+    (evaluate_and_augment가 아니라, K-means 후보 자체를 처음부터 뽑는 버전).
+    """
+    finished = pyqtSignal(object, list)  # (OptimizationResult, list[GatewaySite] 제안된 GW 전체)
+    error = pyqtSignal(str)
+
+    def __init__(self, dem_path: str, nodes: list, initial_k: int,
+                 max_k: int, coverage_target: float, analysis_settings: dict = None):
+        super().__init__()
+        self.dem_path = dem_path
+        self.nodes = nodes
+        self.initial_k = initial_k
+        self.max_k = max_k
+        self.coverage_target = coverage_target
+        self.analysis_settings = analysis_settings or {}
+
+    def run(self):
+        try:
+            from lorascape.core.optimization.gw_placement import optimize_gw_placement
+            with DemLoader(self.dem_path) as dem:
+                result = optimize_gw_placement(
+                    self.nodes, dem,
+                    initial_k=self.initial_k, max_k=self.max_k,
+                    coverage_target=self.coverage_target,
+                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
+                    environment=self.analysis_settings.get("environment", "urban"),
+                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
+                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                )
+            self.finished.emit(result, result.gateways)
+        except Exception as e:
+            self.error.emit(str(e))

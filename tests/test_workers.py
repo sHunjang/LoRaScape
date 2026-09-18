@@ -1,6 +1,6 @@
 """workers.py의 LoadDataWorker 검증 테스트임. QThread 없이 run()을 직접 호출해서 검증함."""
 import pytest
-from lorascape.gui.workers import LoadDataWorker, HeatmapWorker
+from lorascape.gui.workers import LoadDataWorker, HeatmapWorker, SuggestGreenfieldGWWorker, SuggestAdditionalGWWorker
 
 XLSX_PATH = "sample_data/(AIoT 실증) 현장 설치 인프라 총괄표.xlsx"
 
@@ -86,3 +86,50 @@ def test_heatmap_worker_emits_error_on_missing_dem():
     worker.error.connect(lambda msg: errors.append(msg))
     worker.run()
     assert len(errors) == 1
+
+
+def test_suggest_additional_gw_worker_separates_new_from_existing():
+    import os
+    dem_path = "sample_data/seongnam/dem_build_seongnam_3857-2.img"
+    if not os.path.exists(dem_path):
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    from lorascape.data.schema import GatewaySite, NodeSite
+
+    existing = [GatewaySite(
+        gw_id="EXISTING_1", region="테스트", location_desc="",
+        lat=37.20, lon=127.12, install_type="테스트", power_source="테스트",
+    )]
+    nodes = [
+        NodeSite(node_id="N1", region="테스트", location_desc="", lat=37.201, lon=127.121, device_type="테스트", install_type="테스트"),
+        NodeSite(node_id="N2", region="테스트", location_desc="", lat=37.60, lon=127.30, device_type="테스트", install_type="테스트"),
+    ]
+
+    worker = SuggestAdditionalGWWorker(dem_path, nodes, existing_gateways=existing, max_additional=5, coverage_target=1.0)
+    result_holder = {}
+    worker.finished.connect(lambda result, suggested: result_holder.update(result=result, suggested=suggested))
+    worker.run()
+
+    assert "suggested" in result_holder
+    for gw in result_holder["suggested"]:
+        assert gw.gw_id != "EXISTING_1"  # 기존 GW는 제안 목록에 포함되면 안 됨
+
+
+def test_suggest_greenfield_gw_worker_ignores_no_existing_concept():
+    import os
+    dem_path = "sample_data/seongnam/dem_build_seongnam_3857-2.img"
+    if not os.path.exists(dem_path):
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    from lorascape.data.schema import NodeSite
+
+    nodes = [
+        NodeSite(node_id="N1", region="테스트", location_desc="", lat=37.40, lon=127.12, device_type="테스트", install_type="테스트"),
+    ]
+
+    worker = SuggestGreenfieldGWWorker(dem_path, nodes, initial_k=1, max_k=3, coverage_target=1.0)
+    result_holder = {}
+    worker.finished.connect(lambda result, suggested: result_holder.update(result=result, suggested=suggested))
+    worker.run()
+
+    assert len(result_holder["suggested"]) >= 1

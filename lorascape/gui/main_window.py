@@ -12,7 +12,7 @@ from PyQt5.QtGui import QCursor
 
 from lorascape.gui.widgets.map_widget import MapWidget
 from lorascape.gui.widgets.result_panel import ResultPanel
-from lorascape.gui.workers import LoadDataWorker, OptimizeWorker, HeatmapWorker
+from lorascape.gui.workers import LoadDataWorker, OptimizeWorker, HeatmapWorker, SuggestAdditionalGWWorker, SuggestGreenfieldGWWorker
 
 from lorascape.gui.app_config import load_config
 
@@ -111,6 +111,8 @@ class MainWindow(QMainWindow):
         act_gw_list = QAction("GW 목록", self)
         act_node_list = QAction("단말 목록", self)
         act_optimize = QAction("GW 배치 검증 및 보강", self)
+        act_suggest_add = QAction("추가 설치 위치 제안", self)
+        act_suggest_greenfield = QAction("신규 GW 배치 추천", self)
         act_distance = QAction("거리 분석", self)
         act_profile = QAction("단면도", self)
         act_settings = QAction("설정", self)
@@ -118,6 +120,8 @@ class MainWindow(QMainWindow):
         act_gw_list.triggered.connect(self._open_gw_list)
         act_node_list.triggered.connect(self._open_node_list)
         act_optimize.triggered.connect(self._on_optimize_clicked)
+        act_suggest_add.triggered.connect(self._on_suggest_additional_clicked)
+        act_suggest_greenfield.triggered.connect(self._on_suggest_greenfield_clicked)
         act_distance.triggered.connect(self._open_distance_window)
         act_profile.triggered.connect(self._open_profile_window)
         act_settings.triggered.connect(self._open_settings)
@@ -125,6 +129,8 @@ class MainWindow(QMainWindow):
         tb.addAction(act_gw_list)
         tb.addAction(act_node_list)
         tb.addAction(act_optimize)
+        tb.addAction(act_suggest_add)
+        tb.addAction(act_suggest_greenfield)
         tb.addAction(act_distance)
         tb.addAction(act_settings)
         tb.addAction(act_profile)
@@ -634,3 +640,119 @@ class MainWindow(QMainWindow):
             self._profile_win.set_data(self.gateways, self.nodes, dem)
         self._profile_win.show()
         self._profile_win.raise_()
+        
+
+    # ── 추가 설치 위치 제안 (기존 GW+Node 있는 상태) ──────────
+
+    def _on_suggest_additional_clicked(self):
+        if not self.nodes:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "Node 데이터가 없습니다.").exec_()
+            return
+        if not self.dem_path:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
+            return
+        if not self.gateways:
+            _styled_message_box(
+                self, QMessageBox.Information, "알림",
+                "기존 GW가 없습니다. GW가 하나도 없는 상태라면 '신규 GW 배치 추천'을 사용하세요."
+            ).exec_()
+            return
+
+        self.map_widget.show_loading("추가 설치 위치 분석 중...")
+        self.status_label.setText("추가 설치 위치 분석 중...")
+
+        worker = SuggestAdditionalGWWorker(
+            self.dem_path, self.nodes, existing_gateways=self.gateways,
+            max_additional=self._settings.get("max_additional", 15),
+            coverage_target=self._settings.get("coverage_target", 0.9),
+            analysis_settings=self._settings,
+        )
+        self._start_worker(worker, self._on_suggestion_ready, error_slot=self._on_suggestion_error)
+
+    def _on_suggestion_ready(self, result, suggested: list):
+        self.map_widget.hide_loading()
+
+        if not suggested:
+            self.status_label.setText("이미 목표 커버리지를 달성했습니다 — 추가 설치가 필요 없습니다.")
+            self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=result)
+            self.last_result = result
+            self.result_panel.show_result(result, len(self.nodes))
+            return
+
+        # 지도에 기존 GW + 제안된 GW(미리보기)를 같이 보여줌 - 아직 self.gateways에는 반영 안 함
+        preview_gateways = self.gateways + suggested
+        self.map_widget.refresh(gws=preview_gateways, nodes=self.nodes, result=result)
+        self.status_label.setText(f"{len(suggested)}개 추가 설치 위치 제안됨 — 검토 후 적용하세요.")
+
+        from lorascape.gui.widgets.suggestion_window import SuggestionWindow
+        win = SuggestionWindow("추가 설치 위치 제안", suggested, result.node_gw_ids, parent=self)
+        win.sig_apply_requested.connect(self._on_suggestions_applied)
+        if win.exec_() != win.Accepted:
+            # 취소하면 미리보기도 원래대로 되돌림
+            self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+            self.status_label.setText("제안이 취소되었습니다.")
+
+    def _on_suggestion_error(self, message: str):
+        self.map_widget.hide_loading()
+        self.status_label.setText("제안 분석 실패")
+        _styled_message_box(self, QMessageBox.Warning, "오류", message).exec_()
+
+    def _on_suggestions_applied(self, approved_gateways: list):
+        """
+        사용자가 SuggestionWindow에서 '선택 적용'한 GW들을 실제 self.gateways에 반영함.
+        이 시점에서야 비로소 제안이 '확정'됨.
+        """
+        self.gateways.extend(approved_gateways)
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        self.status_label.setText(f"{len(approved_gateways)}개 GW가 목록에 추가되었습니다.")
+
+    # ── 신규 GW 배치 추천 (GW 없는 상태) ──────────────────────
+
+    def _on_suggest_greenfield_clicked(self):
+        if not self.nodes:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "Node 데이터가 없습니다.").exec_()
+            return
+        if not self.dem_path:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
+            return
+
+        if self.gateways:
+            reply = QMessageBox.question(
+                self, "확인",
+                f"이미 GW {len(self.gateways)}개가 있습니다. 기존 GW는 무시하고 "
+                f"Node 위치만으로 완전히 새로운 배치를 추천합니다. 계속할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self.map_widget.show_loading("신규 GW 배치 분석 중...")
+        self.status_label.setText("신규 GW 배치 분석 중 (기존 GW 무시)...")
+
+        worker = SuggestGreenfieldGWWorker(
+            self.dem_path, self.nodes,
+            initial_k=1, max_k=self._settings.get("max_additional", 15),
+            coverage_target=self._settings.get("coverage_target", 0.9),
+            analysis_settings=self._settings,
+        )
+        self._start_worker(worker, self._on_greenfield_suggestion_ready, error_slot=self._on_suggestion_error)
+
+    def _on_greenfield_suggestion_ready(self, result, suggested: list):
+        self.map_widget.hide_loading()
+
+        if not suggested:
+            self.status_label.setText("배치를 추천할 수 없습니다.")
+            return
+
+        # 기존 GW와 무관하게 미리보기(기존 GW는 화면에서 잠깐 안 보이게 함 - 그린필드 시나리오라서)
+        self.map_widget.refresh(gws=suggested, nodes=self.nodes, result=result)
+        self.status_label.setText(f"{len(suggested)}개 신규 GW 배치 제안됨 — 검토 후 적용하세요.")
+
+        from lorascape.gui.widgets.suggestion_window import SuggestionWindow
+        win = SuggestionWindow("신규 GW 배치 추천", suggested, result.node_gw_ids, parent=self)
+        win.sig_apply_requested.connect(self._on_suggestions_applied)
+        if win.exec_() != win.Accepted:
+            self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+            self.status_label.setText("제안이 취소되었습니다.")
