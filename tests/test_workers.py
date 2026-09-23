@@ -60,28 +60,36 @@ def test_heatmap_worker_reports_progress_up_to_100():
     if not os.path.exists(dem_path):
         pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
 
-    from lorascape.data.schema import GatewaySite
+    from lorascape.data.schema import GatewaySite, NodeSite
     gw = GatewaySite(
         gw_id="TEST_GW", region="테스트", location_desc="",
         lat=37.40, lon=127.12, install_type="테스트", power_source="테스트",
     )
+    node = NodeSite(
+        node_id="N1", region="테스트", location_desc="",
+        lat=37.4005, lon=127.1205, device_type="테스트", install_type="테스트",
+    )
 
-    worker = HeatmapWorker([gw], dem_path, grid_size=5, radius_km=0.5)
+    worker = HeatmapWorker([gw], [node], dem_path, grid_size=5, radius_km=0.5)
     progress_values = []
     worker.progress.connect(lambda pct, msg: progress_values.append(pct))
     worker.run()
 
-    assert progress_values  # 최소 한 번은 진행률이 보고돼야 함
-    assert progress_values[-1] == 100  # 마지막은 반드시 100%여야 함 (0%에 멈춰있던 버그 재발 방지)
+    assert progress_values
+    assert progress_values[-1] == 100
 
 
 def test_heatmap_worker_emits_error_on_missing_dem():
-    from lorascape.data.schema import GatewaySite
+    from lorascape.data.schema import GatewaySite, NodeSite
     gw = GatewaySite(
         gw_id="TEST_GW", region="테스트", location_desc="",
         lat=37.40, lon=127.12, install_type="테스트", power_source="테스트",
     )
-    worker = HeatmapWorker([gw], "nonexistent_dem.img", grid_size=5)
+    node = NodeSite(
+        node_id="N1", region="테스트", location_desc="",
+        lat=37.41, lon=127.13, device_type="테스트", install_type="테스트",
+    )
+    worker = HeatmapWorker([gw], [node], "nonexistent_dem.img", grid_size=5)
     errors = []
     worker.error.connect(lambda msg: errors.append(msg))
     worker.run()
@@ -133,3 +141,30 @@ def test_suggest_greenfield_gw_worker_ignores_no_existing_concept():
     worker.run()
 
     assert len(result_holder["suggested"]) >= 1
+
+
+def test_heatmap_worker_returns_scoped_connection_result():
+    import os
+    dem_path = "sample_data/seongnam/dem_build_seongnam_3857-2.img"
+    if not os.path.exists(dem_path):
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    from lorascape.data.schema import GatewaySite, NodeSite
+
+    gw = GatewaySite(
+        gw_id="TEST_GW", region="테스트", location_desc="",
+        lat=37.40, lon=127.12, install_type="테스트", power_source="테스트",
+    )
+    node = NodeSite(
+        node_id="N1", region="테스트", location_desc="",
+        lat=37.4005, lon=127.1205, device_type="테스트", install_type="테스트",
+    )
+
+    worker = HeatmapWorker([gw], [node], dem_path, grid_size=5, radius_km=0.5)
+    holder = {}
+    worker.finished.connect(lambda layers, result: holder.update(layers=layers, result=result))
+    worker.run()
+
+    assert "result" in holder
+    assert holder["result"].k == 1
+    assert "N1" in holder["result"].connections

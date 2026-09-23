@@ -81,17 +81,22 @@ class OptimizeWorker(QObject):
 class HeatmapWorker(QObject):
     """
     선택된 GW들의 커버리지 히트맵을 백그라운드에서 계산하는 워커임.
-    progress 시그널은 이제 '격자 셀 단위'로 갱신됨 - GW 단위로만 하면 GW가
-    1개뿐일 때 진행률이 0%에 멈춰있는 것처럼 보이는 문제가 있었음.
+
+    ★ 추가: 히트맵 이미지뿐 아니라, 선택된 GW들만 기준으로 전체 Node의
+    실제 연결 여부(OptimizationResult)도 같이 계산해서 반환함. 이걸로
+    Node 마커를 색칠하면 "이 히트맵 커버리지 안에 있는 Node가 실제로
+    초록색(커버됨)으로 표시"되게 만들 수 있음 - 예전엔 히트맵과 마커 색상이
+    서로 다른 계산 결과를 참조해서 안 맞는 경우가 있었음.
     """
-    finished = pyqtSignal(list)
+    finished = pyqtSignal(list, object)  # (layers, OptimizationResult)
     progress = pyqtSignal(int, str)
     error = pyqtSignal(str)
 
-    def __init__(self, gateways: list, dem_path: str, grid_size: int = 40,
+    def __init__(self, gateways: list, nodes: list, dem_path: str, grid_size: int = 40,
                  radius_km: float = 2.0, analysis_settings: dict = None):
         super().__init__()
         self.gateways = gateways
+        self.nodes = nodes  # ★ 추가: 연결 판정을 위해 전체 Node 목록도 받음
         self.dem_path = dem_path
         self.grid_size = grid_size
         self.radius_km = radius_km
@@ -100,6 +105,7 @@ class HeatmapWorker(QObject):
     def run(self):
         try:
             from lorascape.core.optimization.heatmap import compute_gw_heatmap_grid
+            from lorascape.core.optimization.gw_placement import evaluate_gateways_coverage
             from lorascape.gui.widgets.heatmap_render import build_heatmap_layer_dict, get_gw_color
 
             multi_gw = len(self.gateways) > 1
@@ -110,10 +116,8 @@ class HeatmapWorker(QObject):
                 for idx, gw in enumerate(self.gateways):
 
                     def _on_cell_progress(done_cells, total_cells, _idx=idx, _gw=gw):
-                        # 이 GW 하나의 진행률(0~1)을 전체 GW 목록 기준 구간으로 환산함.
-                        # 예: GW 2개 중 첫 번째 GW가 50%까지 갔으면 전체는 (0 + 0.5)/2 = 25%
                         gw_local_ratio = done_cells / total_cells
-                        overall_ratio = (_idx + gw_local_ratio) / n_gws
+                        overall_ratio = (_idx + gw_local_ratio) / (n_gws + 1)  # +1은 아래 연결계산 단계 몫
                         pct = int(overall_ratio * 100)
                         self.progress.emit(
                             pct, f"{_gw.gw_id} 커버리지 계산 중... ({_idx+1}/{n_gws}, 셀 {done_cells}/{total_cells})"
@@ -131,8 +135,17 @@ class HeatmapWorker(QObject):
                     layer = build_heatmap_layer_dict(grid, base_color=base_color)
                     layers.append(layer)
 
+                self.progress.emit(int(100 * n_gws / (n_gws + 1)), "선택 GW 기준 Node 연결 여부 계산 중...")
+                result = evaluate_gateways_coverage(
+                    self.nodes, self.gateways, dem,
+                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
+                    environment=self.analysis_settings.get("environment", "urban"),
+                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
+                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                )
+
             self.progress.emit(100, "완료")
-            self.finished.emit(layers)
+            self.finished.emit(layers, result)
         except Exception as e:
             self.error.emit(str(e))
             
