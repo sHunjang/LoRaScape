@@ -92,7 +92,15 @@ def evaluate_connection(
     bandwidth_hz: float = 125_000,
     receiver_noise_figure_db: float = 6.0,
 ) -> Optional[ConnectionResult]:
-    """GW 하나와 Node 하나 사이 연결 가능 여부 판정. gw/node 객체의 무선 파라미터를 기본으로 씀."""
+    """
+    GW 하나와 Node 하나 사이 연결 가능 여부 판정. gw/node 객체의 무선 파라미터를 기본으로 씀.
+
+    node.min_rx_dbm을 하드 하한선으로 반영함. 예전엔 이 필드가 스키마에만
+    있고 실제 판정에는 SF별 SNR 임계값만 썼는데, 그러면 Node마다 다르게 설정한
+    최소 수신 레벨이 아무 의미가 없었음. 이제는 "SF 기준을 만족하더라도, 이
+    Node가 개별적으로 요구하는 최소 수신 레벨보다 약하면 연결 실패"로 처리함
+    (SF 판정과 min_rx_dbm 판정 둘 다 통과해야 연결됨 - AND 조건).
+    """
     pl = compute_total_path_loss(gw, node, dem, fc_mhz, environment)
 
     if pl > max_path_loss_db:
@@ -107,6 +115,10 @@ def evaluate_connection(
         node_cable_loss_db if node_cable_loss_db is not None else node.cable_loss_db,
         indoor_penetration_loss_db=node.indoor_loss_db,
     )
+
+    if pr < node.min_rx_dbm:
+        return None  # ★ Node별 최소 수신 레벨 하한선 미달 - SF 판정 이전에 바로 탈락시킴
+
     snr = snr_db(pr, bandwidth_hz, receiver_noise_figure_db)
     sf = select_sf(snr)
 
@@ -385,4 +397,35 @@ def evaluate_and_augment(
         gateways=final_gateways, connections=connections, node_gw_ids=node_gw_ids,
         coverage_ratio=coverage_ratio, k=len(final_gateways),
         target_met=coverage_ratio >= coverage_target,
+    )
+
+
+def evaluate_gateways_coverage(
+    nodes: list[NodeSite],
+    gateways: list[GatewaySite],
+    dem,
+    fc_mhz: float = 920.0,
+    environment: str = "urban",
+    max_path_loss_db: float = DEFAULT_MAX_PATH_LOSS_DB,
+    **link_kwargs,
+) -> OptimizationResult:
+    """
+    지정한 GW들(gateways)만 기준으로 전체 Node의 커버리지를 평가함. 최적화나
+    K-means 없이 "이 GW들만 있다면 어떻게 되는가"를 그대로 계산하는 함수임.
+
+    지도에서 GW를 몇 개 선택해서 '선택 커버리지'를 볼 때 씀 - 이 결과로
+    Node 마커를 색칠하면, 방금 선택한 GW 기준의 실제 연결 여부가 반영됨
+    (예전엔 이전에 실행했던 전체 최적화 결과를 그대로 재활용해서, 선택한
+    GW랑 안 맞는 정보가 표시되는 문제가 있었음).
+    """
+    if not nodes:
+        raise ValueError("nodes가 비어있음 - 평가할 대상이 없음")
+
+    matrix = _compute_link_matrix(gateways, nodes, dem, fc_mhz, environment, max_path_loss_db, **link_kwargs)
+    connections, node_gw_ids, coverage_ratio = _connections_from_chosen(gateways, nodes, matrix)
+
+    return OptimizationResult(
+        gateways=list(gateways), connections=connections, node_gw_ids=node_gw_ids,
+        coverage_ratio=coverage_ratio, k=len(gateways),
+        target_met=coverage_ratio >= 1.0,  # 이 뷰에서는 목표치 개념이 없어서 100% 여부만 참고용으로 표시
     )

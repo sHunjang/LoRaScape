@@ -178,11 +178,6 @@ class MainWindow(QMainWindow):
 
 
     def _on_selected_coverage_requested(self, gw_ids: list):
-        """
-        GW목록창에서 특정 GW들만 골라 '선택 커버리지'를 눌렀을 때임.
-        빈 리스트면 히트맵을 지우고 전체 마커만 다시 보여줌.
-        선택된 GW들의 격자 히트맵을 계산해서(무거운 연산이라 워커로 분리) 지도에 얹음.
-        """
         if not gw_ids:
             self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
             self.status_label.setText("전체 GW 표시로 복귀")
@@ -198,24 +193,33 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"선택된 GW {len(gw_ids)}개 히트맵 계산 중...")
 
         worker = HeatmapWorker(
-            selected_gateways, self.dem_path,
+            selected_gateways, self.nodes, self.dem_path,  # ★ self.nodes 추가 전달
             grid_size=self._settings.get("heatmap_grid_size", 40),
             analysis_settings=self._settings,
         )
         worker.progress.connect(
             lambda pct, msg: self.map_widget.update_loading_text(f"{msg} ({pct}%)")
         )
-        self._start_worker(worker, lambda layers: self._on_heatmap_done(layers, gw_ids),
+        self._start_worker(worker, lambda layers, result: self._on_heatmap_done(layers, result, gw_ids),
                             error_slot=self._on_heatmap_error)
 
-    def _on_heatmap_done(self, layers: list, gw_ids: list):
+
+    def _on_heatmap_done(self, layers: list, result, gw_ids: list):
+        """
+        ★ result가 이제 전체 최적화 결과(last_result)가 아니라, 방금 선택한 GW들만
+        기준으로 새로 계산된 OptimizationResult임 - 그래서 히트맵 안의 Node가
+        실제로 초록색(커버됨)으로 정확히 표시됨.
+        """
         self.map_widget.hide_loading()
         self.map_widget.refresh(
-            gws=self.gateways, nodes=self.nodes, result=self.last_result,
+            gws=self.gateways, nodes=self.nodes, result=result,
             heatmaps=layers, selected_gws=gw_ids,
-            settings=self._settings,  # ★ 추가: heatmap_opacity가 실제로 반영되도록
         )
-        self.status_label.setText(f"선택된 GW {len(gw_ids)}개 커버리지 히트맵 표시 중")
+        covered = sum(1 for c in result.connections.values() if c is not None)
+        self.status_label.setText(
+            f"선택된 GW {len(gw_ids)}개 커버리지 표시 중 — Node {covered}/{len(self.nodes)}개 커버"
+        )
+
 
     def _on_heatmap_error(self, message: str):
         self.map_widget.hide_loading()

@@ -15,7 +15,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from lorascape.gui.widgets.dialogs import NodeParamDialog, STYLE_DLG, DARK, PANEL, TEXT, MUTED, BORDER
 from lorascape.data.schema import NodeSite
 
-COLS = ["Node ID", "지역", "설치물 유형", "위도", "경도", "Gr(dBi)", "높이(m)"]
+COLS = ["Node ID", "지역", "설치물 유형", "위도", "경도", "최소수신(dBm)", "Gr(dBi)", "높이(m)"]
 
 CSV_FIELDS = [
     "node_id", "region", "device_type", "lat", "lon",
@@ -100,7 +100,8 @@ class NodeListWindow(QDialog):
             self.tbl.insertRow(r)
             values = [node.node_id, node.region, node.device_type,
                       f"{node.lat:.6f}", f"{node.lon:.6f}",
-                      f"{node.antenna_gain_dbi:.1f}", f"{node.antenna_height_m:.1f}"]
+                      f"{node.antenna_gain_dbi:.1f}", f"{node.antenna_height_m:.1f}",
+                      f"{node.min_rx_dbm:.1f}"]
             for c, v in enumerate(values):
                 self.tbl.setItem(r, c, QTableWidgetItem(v))
 

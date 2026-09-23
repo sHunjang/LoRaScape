@@ -70,7 +70,7 @@ class NodeSite:
     # 아래부터 GUI 링크버짓 편집용 무선 파라미터임.
     antenna_gain_dbi: float = DEFAULT_NODE_ANTENNA_GAIN_DBI
     cable_loss_db: float = DEFAULT_NODE_CABLE_LOSS_DB
-    min_rx_dbm: float = DEFAULT_NODE_MIN_RX_DBM       # 참고용 표시값 - 실제 연결 판정은 evaluate_connection의 SF 기준으로 함
+    min_rx_dbm: float = -100.0
     indoor_loss_db: float = DEFAULT_NODE_INDOOR_LOSS_DB
 
     source_sheet: str = ""
