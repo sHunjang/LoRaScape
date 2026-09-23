@@ -8,6 +8,7 @@ node_gw_ids, gw_counts)로만 계산함 - core 쪽 변경 없이 표시 로직�
 """
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QScrollArea,
+    QPushButton,
 )
 from PyQt5.QtCore import Qt
 
@@ -141,6 +142,18 @@ class ResultPanel(QWidget):
         for card in (self.card_coverage, self.card_gw_count, self.card_node_count, self.card_status):
             layout.addWidget(card)
 
+        # ── 히트맵 보기 버튼 ──
+        self.btn_show_heatmap = QPushButton("🗺️ 이 결과를 히트맵으로 보기")
+        self.btn_show_heatmap.setStyleSheet(
+            f"QPushButton{{background:#1c3a5a;color:#7ab8e8;"
+            f"border:1px solid #2a5a8a;border-radius:5px;"
+            f"padding:8px;font-size:11px;font-weight:bold;}}"
+            f"QPushButton:hover{{background:#254d78;}}"
+            f"QPushButton:disabled{{background:#1a1e2a;color:{MUTED};border-color:{BORDER};}}"
+        )
+        self.btn_show_heatmap.setEnabled(False)  # 결과가 없을 땐 비활성화
+        layout.addWidget(self.btn_show_heatmap)
+
         # ── SF별 커버리지 분포 ──
         sf_title = QLabel("SF별 커버리지 분포")
         sf_title.setStyleSheet(f"color:{MUTED};font-size:11px;font-weight:bold;padding-top:6px;")
@@ -171,6 +184,8 @@ class ResultPanel(QWidget):
 
     def show_result(self, result, total_nodes: int):
         """OptimizationResult를 받아서 전체 패널을 갱신함."""
+        self._last_result = result  # ★ 버튼 클릭 시 GW id 목록을 뽑기 위해 보관해둠
+        self.btn_show_heatmap.setEnabled(bool(result.gateways))
         pct = result.coverage_ratio * 100
         self.card_coverage.set_value(f"{pct:.1f}%", _color_for_pct(pct))
         self.card_gw_count.set_value(str(result.k))
@@ -203,6 +218,7 @@ class ResultPanel(QWidget):
         self.card_avg_per_gw.set_value(f"{avg_per_gw:.1f}개")
 
     def show_loading(self):
+        self.btn_show_heatmap.setEnabled(False)
         self.card_status.set_value("계산 중...", MUTED)
         for row in self._sf_rows.values():
             row.set_ratio(0.0, 0)
@@ -210,4 +226,5 @@ class ResultPanel(QWidget):
         self.card_avg_per_gw.set_value("─")
 
     def show_error(self, message: str):
+        self.btn_show_heatmap.setEnabled(False)
         self.card_status.set_value("오류", RED)

@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         self.map_widget = MapWidget()
         self.result_panel = ResultPanel()
+        self.result_panel.btn_show_heatmap.clicked.connect(self._on_show_result_heatmap_clicked)
         self.result_panel.setMaximumWidth(260)
         self.result_panel.setMinimumWidth(220)
 
@@ -760,3 +761,31 @@ class MainWindow(QMainWindow):
         if win.exec_() != win.Accepted:
             self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
             self.status_label.setText("제안이 취소되었습니다.")
+            
+
+    def _on_show_result_heatmap_clicked(self):
+        """
+        결과패널의 '이 결과를 히트맵으로 보기' 버튼임. 방금 실행된 최적화 결과에
+        쓰인 GW 전체를 대상으로 기존 '선택 커버리지' 파이프라인을 그대로 재사용함
+        (중복 로직 없이, 대상 GW id 목록만 다르게 넘기는 방식).
+
+        GW가 많으면(예: 35개) 히트맵 계산이 상당히 오래 걸릴 수 있어서, 실행 전에
+        경고를 한 번 띄움 - "검증 및 보강" 버튼 자체는 항상 마커로 빠르게 결과를
+        보여주고, 히트맵은 사용자가 명시적으로 원할 때만 계산하는 구조를 유지함.
+        """
+        if self.last_result is None or not self.last_result.gateways:
+            return
+
+        gw_ids = [gw.gw_id for gw in self.last_result.gateways]
+
+        if len(gw_ids) > 10:
+            reply = QMessageBox.question(
+                self, "확인",
+                f"GW {len(gw_ids)}개 전체의 히트맵을 계산합니다. GW 수가 많아 "
+                f"시간이 다소 걸릴 수 있습니다. 계속할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self._on_selected_coverage_requested(gw_ids)

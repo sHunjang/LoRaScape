@@ -92,3 +92,26 @@ def test_show_error_sets_status_card(qapp):
     panel = ResultPanel()
     panel.show_error("문제 발생")
     assert panel.card_status._value_lbl.text() == "오류"
+    
+
+def test_show_result_enables_heatmap_button_when_gateways_present(qapp):
+    nodes = [_make_node("N1", 37.4000, 127.1200)]
+    dem = FakeFlatDem()
+    result = optimize_gw_placement(nodes, dem, initial_k=1, max_k=3, coverage_target=1.0)
+
+    panel = ResultPanel()
+    panel.show_result(result, total_nodes=len(nodes))
+
+    assert panel.btn_show_heatmap.isEnabled() is True
+
+
+def test_show_loading_disables_heatmap_button(qapp):
+    panel = ResultPanel()
+    panel.show_loading()
+    assert panel.btn_show_heatmap.isEnabled() is False
+
+
+def test_show_error_disables_heatmap_button(qapp):
+    panel = ResultPanel()
+    panel.show_error("문제 발생")
+    assert panel.btn_show_heatmap.isEnabled() is False
