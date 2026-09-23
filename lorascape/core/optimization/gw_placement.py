@@ -429,3 +429,16 @@ def evaluate_gateways_coverage(
         coverage_ratio=coverage_ratio, k=len(gateways),
         target_met=coverage_ratio >= 1.0,  # 이 뷰에서는 목표치 개념이 없어서 100% 여부만 참고용으로 표시
     )
+    
+
+def test_node_site_default_min_rx_dbm_is_minus_100():
+    """
+    NodeSite의 min_rx_dbm 기본값이 -100dBm으로 고정되어 있는지 확인함
+    (요청에 따라 -126.6에서 변경됨) - 여전히 개별 Node마다 다르게 설정 가능함.
+    """
+    from lorascape.data.schema import NodeSite
+    node = NodeSite(
+        node_id="TEST", region="", location_desc="",
+        lat=37.4, lon=127.1, device_type="", install_type="",
+    )
+    assert node.min_rx_dbm == -100.0
