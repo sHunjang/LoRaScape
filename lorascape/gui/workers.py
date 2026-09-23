@@ -132,7 +132,10 @@ class HeatmapWorker(QObject):
                     )
 
                     base_color = get_gw_color(idx) if multi_gw else None
-                    layer = build_heatmap_layer_dict(grid, base_color=base_color)
+                    layer = build_heatmap_layer_dict(
+                        grid, base_color=base_color,
+                        opacity=self.analysis_settings.get("heatmap_opacity", 0.85),
+                    )
                     layers.append(layer)
 
                 self.progress.emit(int(100 * n_gws / (n_gws + 1)), "선택 GW 기준 Node 연결 여부 계산 중...")

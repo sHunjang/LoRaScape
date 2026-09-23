@@ -4,7 +4,7 @@ map_layers.py 검증 테스트임. Qt/QApplication 없이 folium.Map만으로 �
 import folium
 from lorascape.gui.widgets.map_layers import (
     pr_to_color, build_gw_color_map, add_measure_layer,
-    add_gw_marker_layer, add_node_marker_layer,
+    add_gw_marker_layer, add_node_marker_layer,add_coverage_layers
 )
 from lorascape.data.schema import GatewaySite, NodeSite
 
@@ -69,3 +69,50 @@ def test_add_node_marker_layer_renders_node_id_in_html():
     add_node_marker_layer(m, [node], result=None, gw_color_map={}, selected_gws=None)
     html = m.get_root().render()
     assert "MY_NODE_1" in html
+
+
+def test_add_coverage_layers_hides_pr_layer_when_show_pr_layer_false():
+    """
+    히트맵이 함께 표시될 때 수신전력 분포 원형 레이어가 기본적으로 꺼지는지 확인함.
+    folium.FeatureGroup의 show 속성을 직접 검사함.
+    """
+    import folium
+    m = folium.Map(location=[37.4, 127.1], zoom_start=13)
+
+    class FakeConn:
+        def __init__(self, gw_id, pr):
+            self.gw_id = gw_id
+            self.rx_power_dbm = pr
+
+    class FakeResult:
+        connections = {"N1": FakeConn("GW1", -90)}
+        node_gw_ids = {"N1": ["GW1"]}
+
+    node = type("N", (), {"node_id": "N1", "lat": 37.4, "lon": 127.1})()
+
+    add_coverage_layers(m, [node], FakeResult(), None, 0.5, show_pr_layer=False)
+
+    # FeatureGroup 목록을 순회해서 이름과 show 속성 확인
+    pr_layer = next(c for c in m._children.values() if getattr(c, "layer_name", "") == "수신전력 분포 (분석 결과)")
+    assert pr_layer.show is False
+
+
+def test_add_coverage_layers_shows_pr_layer_by_default():
+    import folium
+    m = folium.Map(location=[37.4, 127.1], zoom_start=13)
+
+    class FakeConn:
+        def __init__(self, gw_id, pr):
+            self.gw_id = gw_id
+            self.rx_power_dbm = pr
+
+    class FakeResult:
+        connections = {"N1": FakeConn("GW1", -90)}
+        node_gw_ids = {"N1": ["GW1"]}
+
+    node = type("N", (), {"node_id": "N1", "lat": 37.4, "lon": 127.1})()
+
+    add_coverage_layers(m, [node], FakeResult(), None, 0.5)  # show_pr_layer 기본값(True) 사용
+
+    pr_layer = next(c for c in m._children.values() if getattr(c, "layer_name", "") == "수신전력 분포 (분석 결과)")
+    assert pr_layer.show is True
