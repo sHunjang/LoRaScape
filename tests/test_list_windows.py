@@ -157,3 +157,25 @@ def test_node_list_window_delete_selected_removes_rows(qapp):
     win._on_delete_selected()
     assert len(win.nodes) == 1
     assert win.nodes[0].node_id == "N2"
+
+
+def test_node_list_window_column_order_matches_values(qapp):
+    """
+    헤더 순서와 값 삽입 순서가 어긋나서 컬럼이 밀려 보이는 버그 재발 방지용 테스트임.
+    각 컬럼에 실제로 맞는 값이 들어가는지 위치별로 확인함.
+    """
+    node = _make_node("N1", 37.4, 127.1)
+    node.min_rx_dbm = -100.0
+    node.antenna_gain_dbi = 3.0
+    node.antenna_height_m = 1.5
+
+    win = NodeListWindow([node])
+
+    from lorascape.gui.widgets.node_list_window import COLS
+    min_rx_col = COLS.index("최소수신(dBm)")
+    gr_col = COLS.index("Gr(dBi)")
+    height_col = COLS.index("높이(m)")
+
+    assert win.tbl.item(0, min_rx_col).text() == "-100.0"
+    assert win.tbl.item(0, gr_col).text() == "3.0"
+    assert win.tbl.item(0, height_col).text() == "1.5"
