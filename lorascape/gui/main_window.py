@@ -431,15 +431,50 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"클릭: ({lon:.5f}, {lat:.5f})")
 
 
+    @staticmethod
+    def _find_by_id(items: list, attr: str, raw_id: str):
+        """
+        드래그된 마커의 id로 목록에서 항목을 찾음. 정확히 일치하는 게 없으면
+        툴팁 형식("GW1 | Pt=14..." 처럼 ' |' 앞부분)일 경우를 대비해 앞부분만 잘라서 다시 찾음.
+        """
+        raw_id = str(raw_id)
+        for item in items:
+            if getattr(item, attr) == raw_id:
+                return item
+        head = raw_id.split(" |")[0].strip()
+        for item in items:
+            if getattr(item, attr) == head:
+                return item
+        return None
+
     def _on_gw_dragged(self, gw_id, lon, lat):
         """
-        GW를 드래그해서 위치를 옮겼을 때임. 지금은 로그만 남기고, 실제로
-        gateways 리스트의 좌표를 갱신하는 로직은 다음 단계에서 붙일 예정임.
+        지도에서 GW 마커를 옮기면 해당 GW의 위경도를 실제 데이터에 반영함.
+        지도는 다시 그리지 않음 - 다시 그리면 사용자가 보던 확대/이동 상태가 초기화되고,
+        마커는 이미 새 위치에 놓여 있으므로 데이터만 맞추면 됨.
         """
-        self.status_label.setText(f"{gw_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
+        gw = self._find_by_id(self.gateways, "gw_id", gw_id)
+        if gw is None:
+            self.status_label.setText(f"이동한 GW를 목록에서 찾지 못했습니다: {gw_id}")
+            return
+        gw.lat, gw.lon = lat, lon
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        self.status_label.setText(
+            f"{gw.gw_id} 위치 변경: ({lat:.6f}, {lon:.6f}) — 커버리지는 다시 계산해야 반영됩니다"
+        )
 
     def _on_node_dragged(self, node_id, lon, lat):
-        self.status_label.setText(f"{node_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
+        node = self._find_by_id(self.nodes, "node_id", node_id)
+        if node is None:
+            self.status_label.setText(f"이동한 단말을 목록에서 찾지 못했습니다: {node_id}")
+            return
+        node.lat, node.lon = lat, lon
+        if self._node_list_win is not None:
+            self._node_list_win.set_nodes(self.nodes)
+        self.status_label.setText(
+            f"{node.node_id} 위치 변경: ({lat:.6f}, {lon:.6f}) — 커버리지는 다시 계산해야 반영됩니다"
+        )
 
 
 

@@ -168,3 +168,52 @@ def test_on_show_result_heatmap_clicked_warns_when_many_gateways(qapp, monkeypat
     window._on_show_result_heatmap_clicked()
 
     assert received == []  # No 눌렀으니 실행 안 되어야 함
+
+
+def _gw(gw_id, lat=37.40, lon=127.10):
+    from lorascape.data.schema import GatewaySite
+    return GatewaySite(gw_id=gw_id, region="", location_desc="", lat=lat, lon=lon,
+                       install_type="", power_source="")
+
+
+def _node(node_id, lat=37.40, lon=127.10):
+    from lorascape.data.schema import NodeSite
+    return NodeSite(node_id=node_id, region="", location_desc="", lat=lat, lon=lon,
+                    device_type="", install_type="")
+
+
+def test_gw_drag_updates_coordinates(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1"), _gw("GW2")]
+    window._on_gw_dragged("GW1", 127.20, 37.50)   # 시그널 인자 순서: (id, lon, lat)
+    assert (window.gateways[0].lat, window.gateways[0].lon) == (37.50, 127.20)
+    assert (window.gateways[1].lat, window.gateways[1].lon) == (37.40, 127.10)   # 다른 GW는 그대로
+
+
+def test_gw_drag_accepts_tooltip_style_id(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1")]
+    window._on_gw_dragged("GW1 | Pt=14.0dBm Gt=6.0dBi h=1.5m | 담당 Node: 0개", 127.20, 37.50)
+    assert window.gateways[0].lat == 37.50
+
+
+def test_gw_drag_unknown_id_changes_nothing(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1")]
+    window._on_gw_dragged("없는GW", 127.20, 37.50)
+    assert (window.gateways[0].lat, window.gateways[0].lon) == (37.40, 127.10)
+
+
+def test_gw_drag_refreshes_open_list_window(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1")]
+    win = window._ensure_gw_list_win()
+    window._on_gw_dragged("GW1", 127.20, 37.50)
+    assert win.tbl.item(0, 3).text() == "37.500000"   # 위도 컬럼
+
+
+def test_node_drag_updates_coordinates(qapp):
+    window = MainWindow()
+    window.nodes = [_node("N1")]
+    window._on_node_dragged("N1", 127.30, 37.60)
+    assert (window.nodes[0].lat, window.nodes[0].lon) == (37.60, 127.30)
