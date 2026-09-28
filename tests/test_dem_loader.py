@@ -95,3 +95,21 @@ def test_get_dem_latlon_bounds_does_not_load_full_band():
     elapsed = time.time() - start
 
     assert elapsed < 1.0  # 메타데이터만 읽는 거라 1초 안에 끝나야 함 (밴드 전체 읽으면 더 걸림)
+
+
+def test_elevation_profile_matches_per_point_lookup():
+    """배치화한 프로파일이 예전 방식(지점별 get_elevation, 구멍은 0.0)과 같은 값을 주는지 확인함."""
+    if not DEM_EXISTS:
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+    from lorascape.data.dem_loader import DemLoader
+    from lorascape.data.coord_transform import distance_m
+
+    lat1, lon1, lat2, lon2, n = 37.40, 127.10, 37.43, 127.14, 20
+    with DemLoader(DEM_PATH) as dem:
+        prof = dem.get_elevation_profile(lat1, lon1, lat2, lon2, n)
+        total = distance_m(lat1, lon1, lat2, lon2)
+        for i, (d, e) in enumerate(prof):
+            t = i / n
+            single = dem.get_elevation(lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t)
+            assert e == (single if single is not None else 0.0)
+            assert abs(d - total * t) < 1e-6

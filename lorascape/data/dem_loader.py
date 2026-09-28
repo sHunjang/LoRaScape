@@ -60,31 +60,19 @@ class DemLoader:
 
     def get_elevation_profile(self, lat1: float, lon1: float, lat2: float, lon2: float, n_samples: int = 50) -> list:
         """
-        두 지점(GW-Node) 사이를 n_samples개 구간으로 나눠서 각 지점의 고도를 샘플링함.
-        Deygout 계산에서 필요한 '지형 프로파일'이 바로 이거임
-        (deygout_recursive 함수의 profile 인자로 그대로 넘길 수 있는 형태).
+        두 지점 사이를 n_samples개 구간으로 나눠 고도를 샘플링함.
+        반환값: [(거리_m, 고도_m), ...] (deygout_recursive의 profile 인자 형태).
 
-        반환값: [(거리_m, 고도_m), (거리_m, 고도_m), ...] 리스트임.
+        샘플 좌표를 한꺼번에 get_elevations_batch로 조회함. 예전엔 샘플마다 get_elevation을
+        불러서 지점당 rasterio 환경 진입/좌표변환 비용이 반복됐음 (히트맵 프로파일링에서 확인).
+        DEM 범위 밖/nodata는 예전과 같이 0.0으로 채워짐.
         """
         from lorascape.data.coord_transform import distance_m
 
         total_dist = distance_m(lat1, lon1, lat2, lon2)
-        profile = []
-
-        for i in range(n_samples + 1):
-            t = i / n_samples  # 0.0 ~ 1.0 보간 비율
-            lat = lat1 + (lat2 - lat1) * t
-            lon = lon1 + (lon2 - lon1) * t
-            elevation = self.get_elevation(lat, lon)
-
-            if elevation is None:
-                # DEM에 구멍 난 지점은 일단 0으로 채움 (TODO: 주변 값으로 보간하는 게 더 정확함)
-                elevation = 0.0
-
-            dist_m = total_dist * t
-            profile.append((dist_m, elevation))
-
-        return profile
+        t = np.linspace(0.0, 1.0, n_samples + 1)
+        elevs = self.get_elevations_batch(lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t)
+        return [(float(total_dist * ti), float(e)) for ti, e in zip(t, elevs)]
 
 
     def get_elevations_batch(self, lats, lons) -> np.ndarray:
