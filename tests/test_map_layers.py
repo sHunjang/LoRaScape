@@ -2,6 +2,9 @@
 map_layers.py 검증 테스트임. Qt/QApplication 없이 folium.Map만으로 테스트 가능함.
 """
 import folium
+
+from types import SimpleNamespace
+
 from lorascape.gui.widgets.map_layers import (
     pr_to_color, build_gw_color_map, add_measure_layer,
     add_gw_marker_layer, add_node_marker_layer,add_coverage_layers
@@ -116,3 +119,40 @@ def test_add_coverage_layers_shows_pr_layer_by_default():
 
     pr_layer = next(c for c in m._children.values() if getattr(c, "layer_name", "") == "수신전력 분포 (분석 결과)")
     assert pr_layer.show is True
+
+
+def _fake_gw(gw_id):
+    return SimpleNamespace(gw_id=gw_id, enabled=True, lat=37.4, lon=127.1,
+                           tx_power_dbm=14.0, antenna_gain_dbi=6.0, antenna_height_m=1.5)
+
+
+def test_add_gw_marker_layer_dims_only_unselected_gateways():
+    import folium
+    from lorascape.gui.widgets.map_layers import add_gw_marker_layer, DIM_OPACITY
+    m = folium.Map()
+    add_gw_marker_layer(m, [_fake_gw("GW1"), _fake_gw("GW2")], None,
+                        {"GW1": "red", "GW2": "blue"}, selected_gws=["GW1"])
+    html = m.get_root().render()
+    assert html.count(f'"opacity": {DIM_OPACITY}') == 1   # 선택 안 된 GW2만
+
+
+def test_add_gw_marker_layer_dims_nothing_without_selection():
+    import folium
+    from lorascape.gui.widgets.map_layers import add_gw_marker_layer, DIM_OPACITY
+    m = folium.Map()
+    add_gw_marker_layer(m, [_fake_gw("GW1"), _fake_gw("GW2")], None,
+                        {"GW1": "red", "GW2": "blue"})
+    assert f'"opacity": {DIM_OPACITY}' not in m.get_root().render()
+
+
+def test_add_node_marker_layer_dims_uncovered_nodes_when_filtering():
+    import folium
+    from lorascape.gui.widgets.map_layers import add_node_marker_layer, DIM_OPACITY
+    covered = SimpleNamespace(node_id="N1", lat=37.4, lon=127.1)
+    uncovered = SimpleNamespace(node_id="N2", lat=37.5, lon=127.2)
+    conn = SimpleNamespace(gw_id="GW1", rx_power_dbm=-90.0)
+    result = SimpleNamespace(connections={"N1": conn, "N2": None}, node_gw_ids={"N1": ["GW1"]})
+
+    m = folium.Map()
+    add_node_marker_layer(m, [covered, uncovered], result, {"GW1": "red"}, selected_gws=["GW1"])
+    assert m.get_root().render().count(f'"opacity": {DIM_OPACITY}') == 1   # 미커버 N2만

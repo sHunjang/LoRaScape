@@ -15,6 +15,10 @@ GW_COLORS = [
     'pink', 'lightblue', 'lightgreen', 'beige', 'black',
 ]
 
+# 히트맵 선택 표시 중, 제외 대상(선택 안 된 GW / 선택 GW로 커버 안 되는 단말) 마커의 투명도임.
+# 0이면 완전히 사라지고, 너무 낮으면 위치를 찾기 어려워서 0.12로 잡음.
+DIM_OPACITY = 0.12
+
 PR_COLOR_LEVELS = [
     (-90,  '#FF2020'),
     (-100, '#FF8C00'),
@@ -238,7 +242,7 @@ def add_node_marker_layer(m: folium.Map, nodes: list, result, gw_color_map: dict
 
         if filtering and not is_selected_link:
             marker_color = 'lightgray'
-            opacity = 0.35
+            opacity = DIM_OPACITY
         else:
             opacity = 1.0
 
@@ -250,23 +254,30 @@ def add_node_marker_layer(m: folium.Map, nodes: list, result, gw_color_map: dict
     nd_lyr.add_to(m)
 
 
-def add_gw_marker_layer(m: folium.Map, gws: list, result, gw_color_map: dict):
-    """GW 마커 레이어를 추가함 (드래그 가능)."""
+def add_gw_marker_layer(m: folium.Map, gws: list, result, gw_color_map: dict, selected_gws=None):
+    """
+    GW 마커 레이어를 추가함 (드래그 가능).
+    selected_gws가 있으면(히트맵 선택 표시 중) 선택되지 않은 GW는 회색 + 아주 흐리게 그림.
+    """
     if not gws:
         return
+
+    filtering = bool(selected_gws)
+    sel_set = set(selected_gws) if selected_gws else set()
 
     gw_lyr = folium.FeatureGroup(name="Gateway", show=True)
     for gw in gws:
         if not gw.enabled:
             continue
-        marker_color = gw_color_map.get(gw.gw_id, 'gray')
+        dimmed = filtering and gw.gw_id not in sel_set
+        marker_color = 'lightgray' if dimmed else gw_color_map.get(gw.gw_id, 'gray')
         cnt = result.gw_counts.get(gw.gw_id, 0) if result else 0
         tip = (f"{gw.gw_id} | Pt={gw.tx_power_dbm}dBm Gt={gw.antenna_gain_dbi}dBi "
                f"h={gw.antenna_height_m}m | 담당 Node: {cnt}개")
         folium.Marker(
             location=[gw.lat, gw.lon], tooltip=tip,
             icon=folium.Icon(color=marker_color, icon_color='white', icon='broadcast-tower', prefix='fa'),
-            draggable=True,
+            draggable=True, opacity=DIM_OPACITY if dimmed else 1.0,
         ).add_to(gw_lyr)
     gw_lyr.add_to(m)
 

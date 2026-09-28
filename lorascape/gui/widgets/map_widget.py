@@ -141,7 +141,7 @@ class MapWidget(QWidget):
             show_pr_layer=show_coverage_circles,
         )
         layers.add_node_marker_layer(m, nodes, result, gw_color_map, selected_gws)
-        layers.add_gw_marker_layer(m, gws, result, gw_color_map)
+        layers.add_gw_marker_layer(m, gws, result, gw_color_map, selected_gws)
         layers.add_field_data_layer(m, field_data)
 
         folium.LayerControl(collapsed=False).add_to(m)
