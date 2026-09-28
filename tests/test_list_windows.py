@@ -179,3 +179,27 @@ def test_node_list_window_column_order_matches_values(qapp):
     assert win.tbl.item(0, min_rx_col).text() == "-100.0"
     assert win.tbl.item(0, gr_col).text() == "3.0"
     assert win.tbl.item(0, height_col).text() == "1.5"
+
+
+def test_node_list_window_csv_import_reads_min_rx_dbm(qapp, tmp_path):
+    """CSV 가져오기가 min_rx_dbm 컬럼을 실제로 읽어서 반영하는지 확인함
+    (전에는 이 필드가 CSV_FIELDS에 빠져 있어서 항상 기본값 -100.0으로만 들어갔음)."""
+    from lorascape.gui.widgets.node_list_window import CSV_FIELDS
+    assert "min_rx_dbm" in CSV_FIELDS
+
+    csv_path = tmp_path / "nodes.csv"
+    csv_path.write_text(
+        "node_id,region,device_type,lat,lon,min_rx_dbm,antenna_gain_dbi,cable_loss_db,antenna_height_m,indoor_loss_db\n"
+        "N1,테스트,맨홀수위센서,37.4,127.1,-75.0,0.0,0.0,1.5,0.0\n",
+        encoding="utf-8-sig",
+    )
+
+    from PyQt5.QtWidgets import QFileDialog
+    orig = QFileDialog.getOpenFileName
+    QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (str(csv_path), ""))
+    try:
+        win = NodeListWindow([])
+        win._on_import_csv()
+        assert win.nodes[0].min_rx_dbm == -75.0
+    finally:
+        QFileDialog.getOpenFileName = orig

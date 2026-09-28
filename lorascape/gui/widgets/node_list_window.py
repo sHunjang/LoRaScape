@@ -19,7 +19,7 @@ COLS = ["Node ID", "지역", "설치물 유형", "위도", "경도", "최소수�
 
 CSV_FIELDS = [
     "node_id", "region", "device_type", "lat", "lon",
-    "antenna_gain_dbi", "cable_loss_db", "antenna_height_m", "indoor_loss_db",
+    "min_rx_dbm", "antenna_gain_dbi", "cable_loss_db", "antenna_height_m", "indoor_loss_db",
 ]
 
 TOOLBAR_BTN_STYLE = (
@@ -223,6 +223,7 @@ class NodeListWindow(QDialog):
                         lon=float(row["lon"]),
                         device_type=row.get("device_type", ""),
                         install_type="CSV 가져오기",
+                        min_rx_dbm=float(row.get("min_rx_dbm", -100.0)),
                         antenna_gain_dbi=float(row.get("antenna_gain_dbi", 0.0)),
                         cable_loss_db=float(row.get("cable_loss_db", 0.0)),
                         antenna_height_m=float(row.get("antenna_height_m", 1.5)),
