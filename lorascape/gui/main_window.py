@@ -15,6 +15,7 @@ from lorascape.gui.widgets.result_panel import ResultPanel
 from lorascape.gui.workers import (
     LoadDataWorker, VerifyCoverageWorker, HeatmapWorker,
     SuggestAdditionalGWWorker, SuggestGreenfieldGWWorker,
+    ReportWorker,
 )
 
 from lorascape.gui.app_config import load_config
@@ -87,6 +88,8 @@ class MainWindow(QMainWindow):
         self._distance_win = None
 
         self._profile_win = None
+        
+        self._report_win = None
 
         self._settings_win = None
 
@@ -118,6 +121,7 @@ class MainWindow(QMainWindow):
         act_suggest_greenfield = QAction("신규 GW 배치 추천", self)
         act_distance = QAction("거리 분석", self)
         act_profile = QAction("단면도", self)
+        act_report = QAction("보고서", self)
         act_settings = QAction("설정", self)
 
         act_gw_list.triggered.connect(self._open_gw_list)
@@ -127,6 +131,7 @@ class MainWindow(QMainWindow):
         act_suggest_greenfield.triggered.connect(self._on_suggest_greenfield_clicked)
         act_distance.triggered.connect(self._open_distance_window)
         act_profile.triggered.connect(self._open_profile_window)
+        act_report.triggered.connect(self._on_report_clicked)
         act_settings.triggered.connect(self._open_settings)
 
         tb.addAction(act_gw_list)
@@ -136,6 +141,7 @@ class MainWindow(QMainWindow):
         tb.addAction(act_suggest_greenfield)
         tb.addAction(act_distance)
         tb.addAction(act_settings)
+        tb.addAction(act_report)
         tb.addAction(act_profile)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -836,3 +842,53 @@ class MainWindow(QMainWindow):
                 return
 
         self._on_selected_coverage_requested(gw_ids)
+
+
+    # ── 리포트 창 ──────────────────────────────────────────────
+
+    def _report_is_stale(self) -> bool:
+        """마지막 검증 이후 GW/단말 목록이 바뀌었는지 확인함 (개수·ID 기준, 위치 이동은 감지 못 함)."""
+        r = self.last_result
+        return (set(r.connections) != {n.node_id for n in self.nodes}
+                or {g.gw_id for g in r.gateways} != {g.gw_id for g in self.gateways if g.enabled})
+
+    def _on_report_clicked(self):
+        if self.last_result is None:
+            _styled_message_box(self, QMessageBox.Information, "알림", "먼저 'GW 배치 검증'을 실행하세요.").exec_()
+            return
+        if not self.dem_path:
+            _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
+            return
+        if self._thread_active:     # 로딩 표시를 띄우기 전에 걸러야 오버레이가 남지 않음
+            self.status_label.setText("이전 작업이 아직 진행 중입니다.")
+            return
+        if self._report_is_stale():
+            reply = QMessageBox.question(
+                self, "확인",
+                "마지막 검증 이후 GW/단말 목록이 바뀌었습니다.\n이전 검증 결과 기준으로 보고서를 만들까요?\n"
+                "(최신 상태로 보려면 'GW 배치 검증'을 다시 실행하세요)",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+
+        self.map_widget.show_loading("보고서 생성 중...")
+        self.status_label.setText("보고서 생성 중...")
+        worker = ReportWorker(self.dem_path, self.last_result, self.nodes, self._settings)
+        self._start_worker(worker, self._on_report_ready, error_slot=self._on_report_error)
+
+    def _on_report_ready(self, report):
+        from lorascape.gui.widgets.report_window import ReportWindow
+        self.map_widget.hide_loading()
+        self.status_label.setText(f"보고서 생성 완료 — 커버율 {report.coverage_ratio * 100:.1f}%")
+        if self._report_win is not None:
+            self._report_win.close()
+        win = ReportWindow(report, parent=self)
+        win.sig_show_heatmap.connect(lambda gw_id: self._on_selected_coverage_requested([gw_id]))
+        self._report_win = win
+        win.show()
+        win.raise_()
+
+    def _on_report_error(self, message: str):
+        self.map_widget.hide_loading()
+        self.status_label.setText("보고서 생성 실패")
+        _styled_message_box(self, QMessageBox.Warning, "보고서 생성 실패", message).exec_()

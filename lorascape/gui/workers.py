@@ -227,3 +227,33 @@ class VerifyCoverageWorker(QObject):
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class ReportWorker(QObject):
+    """마지막 GW 배치 검증 결과로 보고서 데이터를 만드는 워커임 ('수신만' 관계와 미커버 사유 재계산에 DEM 필요)."""
+    finished = pyqtSignal(object)   # CoverageReport
+    error = pyqtSignal(str)
+
+    def __init__(self, dem_path: str, result, nodes: list, analysis_settings: dict = None):
+        super().__init__()
+        self.dem_path = dem_path
+        self.result = result
+        self.nodes = list(nodes)    # 작업 중 화면에서 목록이 바뀌어도 안전하도록 복사함
+        self.analysis_settings = analysis_settings or {}
+
+    def run(self):
+        try:
+            from lorascape.core.reporting.coverage_report import build_coverage_report
+            s = self.analysis_settings
+            with DemLoader(self.dem_path) as dem:
+                report = build_coverage_report(
+                    self.result, self.nodes, dem,
+                    fc_mhz=s.get("fc_mhz", 920.0),
+                    environment=s.get("environment", "urban"),
+                    bandwidth_hz=s.get("bandwidth_hz", 125_000),
+                    receiver_noise_figure_db=s.get("receiver_noise_figure_db", 6.0),
+                    coverage_target=s.get("coverage_target", 0.9),
+                )
+            self.finished.emit(report)
+        except Exception as e:
+            self.error.emit(str(e))
