@@ -94,3 +94,26 @@ def test_load_gateways_raises_when_sheet_found_but_no_valid_coordinates(tmp_path
 
     with pytest.raises(ValueError, match="유효한 행이 하나도 없습니다"):
         load_gateways(str(path))
+
+
+def test_dedupe_node_ids_makes_ids_unique_and_keeps_unique_ones():
+    from types import SimpleNamespace as NS
+    from lorascape.data.site_inventory import _dedupe_node_ids
+    nodes = [NS(node_id="A", device_type="CCTV"), NS(node_id="A", device_type="AI"),
+             NS(node_id="B", device_type="X"), NS(node_id="C", device_type="X"),
+             NS(node_id="C", device_type="X"), NS(node_id="A (AI)", device_type="Y")]
+    _dedupe_node_ids(nodes)
+    ids = [n.node_id for n in nodes]
+    assert len(set(ids)) == len(ids)
+    assert ids[2] == "B" and ids[5] == "A (AI)"     # 원래 유일하던 ID는 그대로
+    assert ids[0] == "A (CCTV)"
+
+
+def test_load_nodes_sample_excel_has_unique_ids():
+    import os
+    path = "sample_data/(AIoT 실증) 현장 설치 인프라 총괄표.xlsx"
+    if not os.path.exists(path):
+        pytest.skip("샘플 엑셀 파일이 없어서 건너뜀")
+    from lorascape.data.site_inventory import load_nodes
+    ids = [n.node_id for n in load_nodes(path)]
+    assert len(ids) == len(set(ids))

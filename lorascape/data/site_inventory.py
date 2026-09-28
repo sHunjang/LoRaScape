@@ -12,6 +12,9 @@ GatewaySite / NodeSite 리스트로 변환하는 모듈임.
 """
 import math
 import pandas as pd
+
+from collections import Counter
+
 from lorascape.data.schema import GatewaySite, NodeSite, DEFAULT_ANTENNA_HEIGHT_M
 
 # GW 위치로 취급할 시트 이름들임. '스마트폴'은 GW를 얹는 폴이라 GW 후보지로 취급하고,
@@ -95,6 +98,26 @@ def load_gateways(xlsx_path: str) -> list[GatewaySite]:
     return result
 
 
+def _dedupe_node_ids(nodes) -> None:
+    """
+    node_id가 겹치는 단말에 장비 유형을 붙여 유일하게 만듦 (원본 리스트를 직접 수정함).
+    같은 폴에 붙은 CCTV/AI 엣지 박스가 관리번호를 공유하거나 '없음'이 ID가 되는 경우가 있는데,
+    결과가 node_id를 키로 저장돼서 겹치면 서로 덮어쓰기 때문임. 이미 유일한 ID는 건드리지 않음.
+    """
+    counts = Counter(n.node_id for n in nodes)
+    taken = {i for i, c in counts.items() if c == 1}
+    for n in nodes:
+        if counts[n.node_id] == 1:
+            continue
+        base = f"{n.node_id} ({n.device_type})" if n.device_type else n.node_id
+        cand, k = base, 2
+        while cand in taken:
+            cand = f"{base} #{k}"
+            k += 1
+        taken.add(cand)
+        n.node_id = cand
+
+
 def load_nodes(xlsx_path: str) -> list[NodeSite]:
     """총괄표 엑셀에서 Node(단말) 위치를 전부 읽어옴. load_gateways랑 검증 로직 동일함."""
     xl = pd.ExcelFile(xlsx_path)
@@ -139,4 +162,5 @@ def load_nodes(xlsx_path: str) -> list[NodeSite]:
             f"위도/경도가 있는 유효한 행이 하나도 없습니다."
         )
 
+    _dedupe_node_ids(result)
     return result
