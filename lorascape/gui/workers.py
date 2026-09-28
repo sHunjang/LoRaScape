@@ -38,44 +38,6 @@ class LoadDataWorker(QObject):
             # 워커 스레드 안에서 예외가 나면 조용히 죽어버리니까, 반드시 시그널로
             # 메인 스레드에 전달해서 사용자에게 보여줘야 함.
             self.error.emit(str(e))
-
-
-class OptimizeWorker(QObject):
-    """
-    기존 설치된 GW를 검증하고, 부족하면 추가 GW를 배치하는 계산을 백그라운드에서 돌리는 워커임.
-    analysis_settings로 fc_mhz/bandwidth_hz/environment/receiver_noise_figure_db 같은
-    시스템 전체 파라미터를 받음 - GW/Node 개별 무선 파라미터는 각 엔티티 필드에서
-    그대로 읽어감 (evaluate_connection 기본 동작).
-    """
-    finished = pyqtSignal(object)
-    error = pyqtSignal(str)
-
-    def __init__(self, dem_path: str, nodes: list, existing_gateways: list,
-                 max_additional: int, coverage_target: float, analysis_settings: dict = None):
-        super().__init__()
-        self.dem_path = dem_path
-        self.nodes = nodes
-        self.existing_gateways = existing_gateways
-        self.max_additional = max_additional
-        self.coverage_target = coverage_target
-        self.analysis_settings = analysis_settings or {}
-
-    def run(self):
-        try:
-            from lorascape.core.optimization.gw_placement import evaluate_and_augment
-            with DemLoader(self.dem_path) as dem:
-                result = evaluate_and_augment(
-                    self.nodes, self.existing_gateways, dem,
-                    max_additional=self.max_additional,
-                    coverage_target=self.coverage_target,
-                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
-                    environment=self.analysis_settings.get("environment", "urban"),
-                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
-                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
-                )
-            self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
             
 
 class HeatmapWorker(QObject):
@@ -229,5 +191,39 @@ class SuggestGreenfieldGWWorker(QObject):
                     receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
                 )
             self.finished.emit(result, result.gateways)
+        except Exception as e:
+            self.error.emit(str(e))
+    
+
+class VerifyCoverageWorker(QObject):
+    """
+    넘겨받은 GW들만으로 전체 Node의 커버리지를 검증하는 워커임 (GW를 새로 추가하지 않음).
+    GW 추가 위치 제안은 SuggestAdditionalGWWorker가 따로 담당함.
+    """
+    finished = pyqtSignal(object)  # OptimizationResult
+    error = pyqtSignal(str)
+
+    def __init__(self, dem_path: str, nodes: list, gateways: list,
+                 coverage_target: float = 0.9, analysis_settings: dict = None):
+        super().__init__()
+        self.dem_path = dem_path
+        self.nodes = nodes
+        self.gateways = gateways
+        self.coverage_target = coverage_target
+        self.analysis_settings = analysis_settings or {}
+
+    def run(self):
+        try:
+            from lorascape.core.optimization.gw_placement import evaluate_gateways_coverage
+            with DemLoader(self.dem_path) as dem:
+                result = evaluate_gateways_coverage(
+                    self.nodes, self.gateways, dem,
+                    coverage_target=self.coverage_target,
+                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
+                    environment=self.analysis_settings.get("environment", "urban"),
+                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
+                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                )
+            self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))

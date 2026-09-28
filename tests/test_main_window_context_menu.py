@@ -217,3 +217,34 @@ def test_node_drag_updates_coordinates(qapp):
     window.nodes = [_node("N1")]
     window._on_node_dragged("N1", 127.30, 37.60)
     assert (window.nodes[0].lat, window.nodes[0].lon) == (37.60, 127.30)
+
+
+def test_verify_warns_when_no_enabled_gateways(qapp, monkeypatch):
+    window = MainWindow()
+    window.dem_path = "dummy.img"
+    window.nodes = [_node("N1")]
+    gw = _gw("GW1")
+    gw.enabled = False
+    window.gateways = [gw]
+
+    called = []
+    monkeypatch.setattr(
+        "lorascape.gui.main_window._styled_message_box",
+        lambda *a, **k: type("_M", (), {"exec_": lambda self: called.append(True)})(),
+    )
+    window._on_optimize_clicked()
+    assert called == [True]
+
+
+def test_verify_passes_only_enabled_gateways_to_worker(qapp, monkeypatch):
+    window = MainWindow()
+    window.dem_path = "dummy.img"
+    window.nodes = [_node("N1")]
+    g_off = _gw("GW_OFF")
+    g_off.enabled = False
+    window.gateways = [_gw("GW1"), g_off]
+
+    captured = {}
+    monkeypatch.setattr(window, "_start_worker", lambda worker, *a, **k: captured.update(worker=worker))
+    window._on_optimize_clicked()
+    assert [g.gw_id for g in captured["worker"].gateways] == ["GW1"]
