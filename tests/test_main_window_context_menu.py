@@ -248,3 +248,38 @@ def test_verify_passes_only_enabled_gateways_to_worker(qapp, monkeypatch):
     monkeypatch.setattr(window, "_start_worker", lambda worker, *a, **k: captured.update(worker=worker))
     window._on_optimize_clicked()
     assert [g.gw_id for g in captured["worker"].gateways] == ["GW1"]
+
+
+def test_report_requires_prior_verification(qapp, monkeypatch):
+    window = MainWindow()
+    window.last_result = None
+    shown, started = [], []
+    monkeypatch.setattr("lorascape.gui.main_window._styled_message_box",
+                        lambda *a, **k: type("_M", (), {"exec_": lambda self: shown.append(True)})())
+    monkeypatch.setattr(window, "_start_worker", lambda *a, **k: started.append(True))
+    window._on_report_clicked()
+    assert shown == [True] and started == []
+
+
+def test_report_is_stale_detects_changed_lists(qapp):
+    from lorascape.core.optimization.gw_placement import OptimizationResult
+    window = MainWindow()
+    window.gateways, window.nodes = [_gw("GW1")], [_node("N1")]
+    window.last_result = OptimizationResult(gateways=list(window.gateways), connections={"N1": None},
+                                            node_gw_ids={"N1": []}, coverage_ratio=0.0, k=1, target_met=False)
+    assert window._report_is_stale() is False
+    window.nodes.append(_node("N2"))
+    assert window._report_is_stale() is True
+
+
+def test_report_window_heatmap_signal_requests_selected_coverage(qapp, monkeypatch):
+    from lorascape.core.reporting.coverage_report import CoverageReport
+    window = MainWindow()
+    got = []
+    monkeypatch.setattr(window, "_on_selected_coverage_requested", lambda ids, silent=False: got.append(ids))
+    window._on_report_ready(CoverageReport(generated_at="", params={}, total_nodes=0, covered_nodes=0,
+                                           uncovered_nodes=0, coverage_ratio=0.0, coverage_target=0.9,
+                                           target_met=False, gw_count=0))
+    window._report_win._current_gw_id = "GW1"
+    window._report_win.btn_heatmap.click()
+    assert got == [["GW1"]]
