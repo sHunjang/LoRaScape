@@ -12,7 +12,10 @@ from PyQt5.QtGui import QCursor
 
 from lorascape.gui.widgets.map_widget import MapWidget
 from lorascape.gui.widgets.result_panel import ResultPanel
-from lorascape.gui.workers import LoadDataWorker, OptimizeWorker, HeatmapWorker, SuggestAdditionalGWWorker, SuggestGreenfieldGWWorker
+from lorascape.gui.workers import (
+    LoadDataWorker, VerifyCoverageWorker, HeatmapWorker,
+    SuggestAdditionalGWWorker, SuggestGreenfieldGWWorker,
+)
 
 from lorascape.gui.app_config import load_config
 
@@ -110,7 +113,7 @@ class MainWindow(QMainWindow):
 
         act_gw_list = QAction("GW 목록", self)
         act_node_list = QAction("단말 목록", self)
-        act_optimize = QAction("GW 배치 검증 및 보강", self)
+        act_optimize = QAction("GW 배치 검증", self)
         act_suggest_add = QAction("추가 설치 위치 제안", self)
         act_suggest_greenfield = QAction("신규 GW 배치 추천", self)
         act_distance = QAction("거리 분석", self)
@@ -343,17 +346,22 @@ class MainWindow(QMainWindow):
         if not self.dem_path:
             _styled_message_box(self, QMessageBox.Warning, "알림", "DEM 파일 경로가 설정되지 않았습니다.").exec_()
             return
-        if not self.gateways:
-            _styled_message_box(self, QMessageBox.Warning, "알림", "기존 GW 목록이 없습니다. 데이터를 먼저 불러와주세요.").exec_()
+
+        active = [g for g in self.gateways if g.enabled]   # 체크 해제한 GW는 계산에서 제외함
+        if not active:
+            _styled_message_box(
+                self, QMessageBox.Warning, "알림",
+                "활성화된 GW가 없습니다. GW 목록에서 GW를 추가/체크하거나, "
+                "GW가 하나도 없다면 '신규 GW 배치 추천'을 사용하세요."
+            ).exec_()
             return
 
-        self.map_widget.show_loading("기존 GW 커버리지 검증 중...")
+        self.map_widget.show_loading("GW 커버리지 검증 중...")
         self.result_panel.show_loading()
-        self.status_label.setText("GW 배치 검증/보강 계산 중...")
+        self.status_label.setText(f"GW {len(active)}개로 커버리지 검증 중...")
 
-        worker = OptimizeWorker(
-            self.dem_path, self.nodes, existing_gateways=self.gateways,
-            max_additional=self._settings.get("max_additional", 15),
+        worker = VerifyCoverageWorker(
+            self.dem_path, self.nodes, active,
             coverage_target=self._settings.get("coverage_target", 0.9),
             analysis_settings=self._settings,
         )
@@ -361,12 +369,16 @@ class MainWindow(QMainWindow):
 
     def _on_optimize_done(self, result):
         self.last_result = result
+        self._active_heatmap_gw_ids = []   # 지도가 히트맵 없이 다시 그려지므로, 드래그 자동 재계산 대상도 비움
         self.map_widget.hide_loading()
         self.result_panel.show_result(result, len(self.nodes))
-        self.status_label.setText(
-            f"완료 — GW {result.k}개, 커버리지 {result.coverage_ratio*100:.1f}%"
-        )
-        self.map_widget.refresh(gws=result.gateways, nodes=self.nodes, result=result)
+
+        msg = f"검증 완료 — GW {result.k}개, 커버리지 {result.coverage_ratio*100:.1f}%"
+        if not result.target_met:
+            target = self._settings.get("coverage_target", 0.9)
+            msg += f" (목표 {target*100:.0f}% 미달 — '추가 설치 위치 제안'으로 보강 위치를 확인하세요)"
+        self.status_label.setText(msg)
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=result)
 
     def _on_optimize_error(self, message: str):
         self.map_widget.hide_loading()

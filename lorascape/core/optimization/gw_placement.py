@@ -407,6 +407,7 @@ def evaluate_gateways_coverage(
     fc_mhz: float = 920.0,
     environment: str = "urban",
     max_path_loss_db: float = DEFAULT_MAX_PATH_LOSS_DB,
+    coverage_target: float = 1.0,
     **link_kwargs,
 ) -> OptimizationResult:
     """
@@ -427,7 +428,7 @@ def evaluate_gateways_coverage(
     return OptimizationResult(
         gateways=list(gateways), connections=connections, node_gw_ids=node_gw_ids,
         coverage_ratio=coverage_ratio, k=len(gateways),
-        target_met=coverage_ratio >= 1.0,  # 이 뷰에서는 목표치 개념이 없어서 100% 여부만 참고용으로 표시
+        target_met=coverage_ratio >= coverage_target,
     )
     
 

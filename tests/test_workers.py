@@ -1,6 +1,6 @@
 """workers.py의 LoadDataWorker 검증 테스트임. QThread 없이 run()을 직접 호출해서 검증함."""
 import pytest
-from lorascape.gui.workers import LoadDataWorker, HeatmapWorker, SuggestGreenfieldGWWorker, SuggestAdditionalGWWorker
+from lorascape.gui.workers import LoadDataWorker, HeatmapWorker, SuggestGreenfieldGWWorker, SuggestAdditionalGWWorker, VerifyCoverageWorker
 
 XLSX_PATH = "sample_data/(AIoT 실증) 현장 설치 인프라 총괄표.xlsx"
 
@@ -168,3 +168,25 @@ def test_heatmap_worker_returns_scoped_connection_result():
     assert "result" in holder
     assert holder["result"].k == 1
     assert "N1" in holder["result"].connections
+
+
+def test_verify_coverage_worker_does_not_add_gateways():
+    import os
+    dem_path = "sample_data/seongnam/dem_build_seongnam_3857-2.img"
+    if not os.path.exists(dem_path):
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+    from lorascape.data.schema import GatewaySite, NodeSite
+
+    gw = GatewaySite(gw_id="TEST_GW", region="", location_desc="",
+                     lat=37.40, lon=127.12, install_type="", power_source="")
+    far_node = NodeSite(node_id="N1", region="", location_desc="",
+                        lat=37.60, lon=127.30, device_type="", install_type="")   # 커버 불가 위치
+
+    worker = VerifyCoverageWorker(dem_path, [far_node], [gw], coverage_target=0.9)
+    holder = {}
+    worker.finished.connect(lambda r: holder.update(result=r))
+    worker.run()
+
+    assert [g.gw_id for g in holder["result"].gateways] == ["TEST_GW"]   # GW가 추가되지 않아야 함
+    assert holder["result"].k == 1
+    assert holder["result"].target_met is False

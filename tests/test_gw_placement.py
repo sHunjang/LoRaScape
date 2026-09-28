@@ -311,3 +311,16 @@ def test_evaluate_gateways_coverage_reflects_only_given_gateways():
 def test_evaluate_gateways_coverage_raises_on_empty_nodes():
     with pytest.raises(ValueError):
         evaluate_gateways_coverage([], [_make_gw("G1", 37.4, 127.1)], FakeFlatDem())
+    
+
+def test_evaluate_gateways_coverage_target_met_uses_given_target():
+    gw = _make_gw("G1", 37.4000, 127.1200)
+    near = _make_node("N1", 37.4001, 127.1201)
+    far = _make_node("N2", 38.50, 127.12)   # 100km 넘게 떨어져 연결 불가
+    dem = FakeFlatDem()
+
+    r = evaluate_gateways_coverage([near, far], [gw], dem, coverage_target=0.5)
+    assert r.coverage_ratio == 0.5 and r.target_met is True
+
+    r_default = evaluate_gateways_coverage([near, far], [gw], dem)   # 기본 목표 100%
+    assert r_default.target_met is False
