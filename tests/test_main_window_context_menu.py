@@ -116,3 +116,104 @@ def test_init_map_bounds_from_dem_fails_silently_on_bad_path(qapp):
     window = MainWindow(dem_path="nonexistent_dem.img")
     window._init_map_bounds_from_dem()  # 예외 안 나고 조용히 처리돼야 함
     assert "실패" in window.status_label.text() or window.status_label.text() != ""
+
+
+def test_on_show_result_heatmap_clicked_does_nothing_without_result(qapp):
+    """결과가 없으면 그냥 조용히 무시되고 크래시 없어야 함."""
+    window = MainWindow()
+    window.last_result = None
+    window._on_show_result_heatmap_clicked()  # 예외 없이 지나가야 함
+
+
+def test_on_show_result_heatmap_clicked_triggers_selected_coverage(qapp, monkeypatch):
+    """결과가 있으면 결과의 GW id 목록으로 _on_selected_coverage_requested를 호출해야 함."""
+    from lorascape.core.optimization.gw_placement import OptimizationResult
+    from lorascape.data.schema import GatewaySite
+
+    window = MainWindow()
+    gw = GatewaySite(
+        gw_id="GW1", region="테스트", location_desc="",
+        lat=37.4, lon=127.1, install_type="테스트", power_source="테스트",
+    )
+    window.last_result = OptimizationResult(
+        gateways=[gw], connections={}, node_gw_ids={}, coverage_ratio=1.0, k=1, target_met=True,
+    )
+
+    received = []
+    monkeypatch.setattr(window, "_on_selected_coverage_requested", lambda ids: received.append(ids))
+    window._on_show_result_heatmap_clicked()
+
+    assert received == [["GW1"]]
+
+
+def test_on_show_result_heatmap_clicked_warns_when_many_gateways(qapp, monkeypatch):
+    """GW가 10개 넘으면 확인 팝업을 띄우고, No를 누르면 실행 안 되어야 함."""
+    from lorascape.core.optimization.gw_placement import OptimizationResult
+    from lorascape.data.schema import GatewaySite
+    from PyQt5.QtWidgets import QMessageBox
+
+    window = MainWindow()
+    gws = [
+        GatewaySite(gw_id=f"GW{i}", region="테스트", location_desc="",
+                    lat=37.4, lon=127.1, install_type="테스트", power_source="테스트")
+        for i in range(15)
+    ]
+    window.last_result = OptimizationResult(
+        gateways=gws, connections={}, node_gw_ids={}, coverage_ratio=1.0, k=15, target_met=True,
+    )
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    received = []
+    monkeypatch.setattr(window, "_on_selected_coverage_requested", lambda ids: received.append(ids))
+    window._on_show_result_heatmap_clicked()
+
+    assert received == []  # No 눌렀으니 실행 안 되어야 함
+
+
+def _gw(gw_id, lat=37.40, lon=127.10):
+    from lorascape.data.schema import GatewaySite
+    return GatewaySite(gw_id=gw_id, region="", location_desc="", lat=lat, lon=lon,
+                       install_type="", power_source="")
+
+
+def _node(node_id, lat=37.40, lon=127.10):
+    from lorascape.data.schema import NodeSite
+    return NodeSite(node_id=node_id, region="", location_desc="", lat=lat, lon=lon,
+                    device_type="", install_type="")
+
+
+def test_gw_drag_updates_coordinates(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1"), _gw("GW2")]
+    window._on_gw_dragged("GW1", 127.20, 37.50)   # 시그널 인자 순서: (id, lon, lat)
+    assert (window.gateways[0].lat, window.gateways[0].lon) == (37.50, 127.20)
+    assert (window.gateways[1].lat, window.gateways[1].lon) == (37.40, 127.10)   # 다른 GW는 그대로
+
+
+def test_gw_drag_accepts_tooltip_style_id(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1")]
+    window._on_gw_dragged("GW1 | Pt=14.0dBm Gt=6.0dBi h=1.5m | 담당 Node: 0개", 127.20, 37.50)
+    assert window.gateways[0].lat == 37.50
+
+
+def test_gw_drag_unknown_id_changes_nothing(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1")]
+    window._on_gw_dragged("없는GW", 127.20, 37.50)
+    assert (window.gateways[0].lat, window.gateways[0].lon) == (37.40, 127.10)
+
+
+def test_gw_drag_refreshes_open_list_window(qapp):
+    window = MainWindow()
+    window.gateways = [_gw("GW1")]
+    win = window._ensure_gw_list_win()
+    window._on_gw_dragged("GW1", 127.20, 37.50)
+    assert win.tbl.item(0, 3).text() == "37.500000"   # 위도 컬럼
+
+
+def test_node_drag_updates_coordinates(qapp):
+    window = MainWindow()
+    window.nodes = [_node("N1")]
+    window._on_node_dragged("N1", 127.30, 37.60)
+    assert (window.nodes[0].lat, window.nodes[0].lon) == (37.60, 127.30)

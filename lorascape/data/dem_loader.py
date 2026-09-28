@@ -60,31 +60,45 @@ class DemLoader:
 
     def get_elevation_profile(self, lat1: float, lon1: float, lat2: float, lon2: float, n_samples: int = 50) -> list:
         """
-        두 지점(GW-Node) 사이를 n_samples개 구간으로 나눠서 각 지점의 고도를 샘플링함.
-        Deygout 계산에서 필요한 '지형 프로파일'이 바로 이거임
-        (deygout_recursive 함수의 profile 인자로 그대로 넘길 수 있는 형태).
+        두 지점 사이를 n_samples개 구간으로 나눠 고도를 샘플링함.
+        반환값: [(거리_m, 고도_m), ...] (deygout_recursive의 profile 인자 형태).
 
-        반환값: [(거리_m, 고도_m), (거리_m, 고도_m), ...] 리스트임.
+        샘플 좌표를 한꺼번에 get_elevations_batch로 조회함. 예전엔 샘플마다 get_elevation을
+        불러서 지점당 rasterio 환경 진입/좌표변환 비용이 반복됐음 (히트맵 프로파일링에서 확인).
+        DEM 범위 밖/nodata는 예전과 같이 0.0으로 채워짐.
         """
         from lorascape.data.coord_transform import distance_m
 
         total_dist = distance_m(lat1, lon1, lat2, lon2)
-        profile = []
+        t = np.linspace(0.0, 1.0, n_samples + 1)
+        elevs = self.get_elevations_batch(lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t)
+        return [(float(total_dist * ti), float(e)) for ti, e in zip(t, elevs)]
 
-        for i in range(n_samples + 1):
-            t = i / n_samples  # 0.0 ~ 1.0 보간 비율
-            lat = lat1 + (lat2 - lat1) * t
-            lon = lon1 + (lon2 - lon1) * t
-            elevation = self.get_elevation(lat, lon)
 
-            if elevation is None:
-                # DEM에 구멍 난 지점은 일단 0으로 채움 (TODO: 주변 값으로 보간하는 게 더 정확함)
-                elevation = 0.0
+    def get_elevations_batch(self, lats, lons) -> np.ndarray:
+        """
+        여러 지점의 고도를 한 번에 조회함. lats/lons는 같은 shape의 배열이고 같은 shape로 반환함.
+        get_elevation()과 동일한 규칙(DEM 범위 밖/nodata는 0.0)을 씀 - get_elevation_profile이
+        구멍을 0.0으로 채우는 것과 결과가 같아야 히트맵이 예전 계산과 일치함.
+        좌표변환을 지점마다 부르지 않고 배열로 한 번에 처리하는 게 핵심임.
+        """
+        lats = np.asarray(lats, dtype=float)
+        lons = np.asarray(lons, dtype=float)
+        xs, ys = rio_transform("EPSG:4326", self.crs, lons.ravel().tolist(), lats.ravel().tolist())
+        cols_f, rows_f = ~self.dataset.transform * (np.asarray(xs), np.asarray(ys))
+        rows = np.floor(rows_f).astype(int)
+        cols = np.floor(cols_f).astype(int)
 
-            dist_m = total_dist * t
-            profile.append((dist_m, elevation))
+        h, w = self._band.shape
+        valid = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
 
-        return profile
+        out = np.zeros(rows.shape, dtype=float)
+        vals = self._band[rows[valid], cols[valid]].astype(float)
+        if self._nodata is not None:
+            vals[vals == self._nodata] = 0.0
+        out[valid] = vals
+        return out.reshape(lats.shape)
+
 
     def is_installable(self, lat: float, lon: float, min_elevation_diff: float = -5.0) -> bool:
         """

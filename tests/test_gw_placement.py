@@ -11,6 +11,7 @@ from lorascape.core.optimization.gw_placement import (
     evaluate_connection,
     compute_total_path_loss,
     evaluate_and_augment,
+    evaluate_gateways_coverage,
 )
 
 
@@ -270,3 +271,43 @@ def test_evaluate_and_augment_adds_gws_when_existing_insufficient():
 def test_evaluate_and_augment_raises_on_empty_nodes():
     with pytest.raises(ValueError):
         evaluate_and_augment([], [_make_gw("G1", 37.4, 127.1)], FakeFlatDem())
+        
+
+def test_evaluate_connection_rejects_below_min_rx_dbm_even_with_valid_sf():
+    """min_rx_dbm이 SF 판정보다 더 엄격하면, SF는 만족해도 연결 실패해야 함."""
+    gw = _make_gw("GW1", 37.40, 127.12)
+    node = _make_node("N1", 37.4009, 127.12)  # 가까운 거리 - 원래는 연결됨
+    node.min_rx_dbm = 0.0  # 비현실적으로 높은 하한선 - 어떤 신호도 이걸 못 넘김
+    dem = FakeFlatDem()
+
+    result = evaluate_connection(gw, node, dem)
+    assert result is None
+
+
+def test_evaluate_connection_accepts_when_above_min_rx_dbm():
+    gw = _make_gw("GW1", 37.40, 127.12)
+    node = _make_node("N1", 37.4009, 127.12)
+    node.min_rx_dbm = -130.0  # 매우 관대한 하한선
+    dem = FakeFlatDem()
+
+    result = evaluate_connection(gw, node, dem)
+    assert result is not None
+
+
+def test_evaluate_gateways_coverage_reflects_only_given_gateways():
+    """existing 최적화와 무관하게, 넘긴 GW들만 기준으로 계산되는지 확인함."""
+    gw_near = _make_gw("NEAR", 37.4000, 127.1200)
+    gw_far = _make_gw("FAR", 38.00, 127.12)  # 멀어서 아무것도 못 커버
+    nodes = [_make_node("N1", 37.4001, 127.1201)]
+    dem = FakeFlatDem()
+
+    result_near_only = evaluate_gateways_coverage(nodes, [gw_near], dem)
+    assert result_near_only.connections["N1"] is not None
+
+    result_far_only = evaluate_gateways_coverage(nodes, [gw_far], dem)
+    assert result_far_only.connections["N1"] is None
+
+
+def test_evaluate_gateways_coverage_raises_on_empty_nodes():
+    with pytest.raises(ValueError):
+        evaluate_gateways_coverage([], [_make_gw("G1", 37.4, 127.1)], FakeFlatDem())

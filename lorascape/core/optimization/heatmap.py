@@ -43,18 +43,13 @@ def compute_gw_heatmap_grid(
     progress_callback=None,
 ) -> HeatmapGrid:
     """
-    GW 하나를 중심으로 radius_km 반경의 정사각형 영역을 grid_size x grid_size
-    격자로 나눠서 각 지점의 수신전력(dBm)을 계산함.
+    GW 하나를 중심으로 radius_km 반경 정사각형을 grid_size x grid_size 격자로 나눠
+    각 지점의 수신전력(dBm)을 계산함.
 
-    grid_size가 커질수록 화질은 좋아지지만 계산 시간이 제곱으로 늘어남
-    (40x40=1600셀, 각 셀마다 DEM 프로파일 10샘플 조회 -> 1600*10=16000회 DEM 조회).
-    실시간성이 필요하면 grid_size를 줄이고, 정밀도가 필요하면 늘리면 됨.
-
-    n_profile_samples를 gw_placement.py의 기본값(20)보다 낮춰둔 이유: 격자 셀 수가
-    Node 개수보다 훨씬 많아서, 프로파일 샘플 수까지 기본값 그대로 쓰면 너무 느려짐 -
-    히트맵은 "대략적인 면적 형태"를 보여주는 목적이라 약간의 정밀도 손실은 감수함.
+    DEM이 get_elevations_batch를 지원하면 모든 셀의 지형 단면을 한 번에 조회함
+    (프로파일링 결과 셀마다 조회하는 방식이 전체 시간의 99%였음). 지원하지 않는
+    DEM(테스트용 가짜 DEM 등)은 기존처럼 셀마다 get_elevation_profile을 씀.
     """
-    # 위도 1도 ≈ 111km 고정 근사, 경도는 위도에 따라 보정 (간단한 근사면 충분 - 격자 범위 계산용)
     lat_delta = radius_km / 111.0
     lon_delta = radius_km / (111.0 * max(np.cos(np.radians(gw.lat)), 0.01))
 
@@ -68,34 +63,42 @@ def compute_gw_heatmap_grid(
     pr_grid = np.full((grid_size, grid_size), -999.0)
     total_cells = grid_size * grid_size
 
+    use_batch = hasattr(dem, "get_elevations_batch")
+    if use_batch:
+        t = np.linspace(0.0, 1.0, n_profile_samples + 1)
+        flat_lat = lat_grid.ravel()[:, None]
+        flat_lon = lon_grid.ravel()[:, None]
+        elev_all = dem.get_elevations_batch(
+            gw.lat + (flat_lat - gw.lat) * t[None, :],
+            gw.lon + (flat_lon - gw.lon) * t[None, :],
+        )  # (셀 수, 샘플 수+1)
+
     for i in range(grid_size):
         for j in range(grid_size):
             lat, lon = lat_grid[i, j], lon_grid[i, j]
-            d_km = distance_m(gw.lat, gw.lon, lat, lon) / 1000.0
-
-            if d_km < 0.01:
-                d_km = 0.01
+            d_km_raw = distance_m(gw.lat, gw.lon, lat, lon) / 1000.0
+            d_km = max(d_km_raw, 0.01)  # GW 바로 위 지점의 log10(0) 방지
 
             base_pl = song_path_loss(fc_mhz, gw.antenna_height_m, node_antenna_height_m, d_km, environment)
 
-            profile = dem.get_elevation_profile(gw.lat, gw.lon, lat, lon, n_profile_samples)
+            if use_batch:
+                total = d_km_raw * 1000.0  # 기존 get_elevation_profile과 같은 실제 거리 기준
+                profile = [(total * tt, float(e)) for tt, e in zip(t, elev_all[i * grid_size + j])]
+            else:
+                profile = dem.get_elevation_profile(gw.lat, gw.lon, lat, lon, n_profile_samples)
+
             diffraction_loss = deygout_recursive(
                 profile, fc_mhz, tx_height=gw.antenna_height_m, rx_height=node_antenna_height_m
             )
-            diffraction_loss_capped = min(diffraction_loss, DEYGOUT_LOSS_CAP_DB)
+            total_pl = base_pl + min(diffraction_loss, DEYGOUT_LOSS_CAP_DB)
 
-            total_pl = base_pl + diffraction_loss_capped
-
-            pr = rx_power_dbm(
+            pr_grid[i, j] = rx_power_dbm(
                 gw.tx_power_dbm, gw.antenna_gain_dbi, gw.cable_loss_db,
                 total_pl, 0.0, 0.0,
             )
-            pr_grid[i, j] = pr
 
             if progress_callback is not None:
                 done = i * grid_size + j + 1
-                # 매 셀마다 부르면 신호가 너무 잦아서(특히 grid_size가 클 때) 워커-메인스레드
-                # 시그널 오버헤드가 커질 수 있어서, 10셀마다(또는 마지막 셀) 한 번만 알림
                 if done % 10 == 0 or done == total_cells:
                     progress_callback(done, total_cells)
 

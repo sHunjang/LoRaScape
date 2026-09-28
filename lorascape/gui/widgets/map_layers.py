@@ -15,6 +15,10 @@ GW_COLORS = [
     'pink', 'lightblue', 'lightgreen', 'beige', 'black',
 ]
 
+# 히트맵 선택 표시 중, 제외 대상(선택 안 된 GW / 선택 GW로 커버 안 되는 단말) 마커의 투명도임.
+# 0이면 완전히 사라지고, 너무 낮으면 위치를 찾기 어려워서 0.12로 잡음.
+DIM_OPACITY = 0.12
+
 PR_COLOR_LEVELS = [
     (-90,  '#FF2020'),
     (-100, '#FF8C00'),
@@ -93,6 +97,12 @@ def add_heatmap_layers(m: folium.Map, heatmaps: list, hm_opacity: float):
     """
     격자 히트맵 이미지 / 등고선 / SF 레이어를 추가함.
     heatmaps는 별도 워커가 미리 계산해서 넘겨주는 데이터임 - 여기선 그리기만 함.
+
+    ★ hm_opacity는 여기서 직접 안 쓰임 - opacity는 heatmap_render.py의
+    build_heatmap_layer_dict()가 이미지 생성 시점에 RGBA 알파값으로 미리
+    반영해서 넘겨줌. ImageOverlay의 opacity는 항상 1.0으로 고정해서 이미
+    이미지에 구워진 알파값이 folium 레이어 투명도와 이중으로 곱해지지
+    않게 함 (이중 감쇠 방지).
     """
     if not heatmaps:
         return
@@ -106,7 +116,7 @@ def add_heatmap_layers(m: folium.Map, heatmaps: list, hm_opacity: float):
             lyr = folium.FeatureGroup(name=lyr_name, show=True)
             folium.raster_layers.ImageOverlay(
                 image=hm['url'], bounds=hm['bounds'],
-                opacity=hm_opacity, interactive=False,
+                opacity=1.0, interactive=False,
                 cross_origin=False, zindex=2,
             ).add_to(lyr)
             lyr.add_to(m)
@@ -143,15 +153,19 @@ def add_heatmap_layers(m: folium.Map, heatmaps: list, hm_opacity: float):
                 sf_lyr.add_to(m)
 
 
-def add_coverage_layers(m: folium.Map, nodes: list, result, selected_gws, cov_opacity: float):
+def add_coverage_layers(m: folium.Map, nodes: list, result, selected_gws, cov_opacity: float, show_pr_layer: bool = True):
     """
     커버리지 분석 결과 기반 레이어 3개(수신전력분포/중첩커버/음영지역)를 추가함.
     result: lorascape.core.optimization.gw_placement.OptimizationResult
+
+    show_pr_layer: '수신전력 분포' 레이어의 초기 표시 여부임. 히트맵(격자 이미지)이
+    같이 그려질 때는 이 원형 레이어가 겹쳐서 지저분해 보이므로 기본값을 꺼서
+    넘겨받음 - 사용자가 레이어 컨트롤에서 직접 다시 켤 수 있음.
     """
     if not result or not nodes:
         return
 
-    cov_hm_lyr = folium.FeatureGroup(name="수신전력 분포 (분석 결과)", show=True)
+    cov_hm_lyr = folium.FeatureGroup(name="수신전력 분포 (분석 결과)", show=show_pr_layer)
     for nd in nodes:
         conn = result.connections.get(nd.node_id)
         if conn is None:
@@ -172,6 +186,7 @@ def add_coverage_layers(m: folium.Map, nodes: list, result, selected_gws, cov_op
         ).add_to(cov_hm_lyr)
     cov_hm_lyr.add_to(m)
 
+    # 이하 중첩 커버/음영지역 레이어는 그대로 유지 (기존에도 show=False가 기본)
     ovlp_lyr = folium.FeatureGroup(name="중첩 커버 영역", show=False)
     for nd in nodes:
         conn = result.connections.get(nd.node_id)
@@ -227,7 +242,7 @@ def add_node_marker_layer(m: folium.Map, nodes: list, result, gw_color_map: dict
 
         if filtering and not is_selected_link:
             marker_color = 'lightgray'
-            opacity = 0.35
+            opacity = DIM_OPACITY
         else:
             opacity = 1.0
 
@@ -239,23 +254,30 @@ def add_node_marker_layer(m: folium.Map, nodes: list, result, gw_color_map: dict
     nd_lyr.add_to(m)
 
 
-def add_gw_marker_layer(m: folium.Map, gws: list, result, gw_color_map: dict):
-    """GW 마커 레이어를 추가함 (드래그 가능)."""
+def add_gw_marker_layer(m: folium.Map, gws: list, result, gw_color_map: dict, selected_gws=None):
+    """
+    GW 마커 레이어를 추가함 (드래그 가능).
+    selected_gws가 있으면(히트맵 선택 표시 중) 선택되지 않은 GW는 회색 + 아주 흐리게 그림.
+    """
     if not gws:
         return
+
+    filtering = bool(selected_gws)
+    sel_set = set(selected_gws) if selected_gws else set()
 
     gw_lyr = folium.FeatureGroup(name="Gateway", show=True)
     for gw in gws:
         if not gw.enabled:
             continue
-        marker_color = gw_color_map.get(gw.gw_id, 'gray')
+        dimmed = filtering and gw.gw_id not in sel_set
+        marker_color = 'lightgray' if dimmed else gw_color_map.get(gw.gw_id, 'gray')
         cnt = result.gw_counts.get(gw.gw_id, 0) if result else 0
         tip = (f"{gw.gw_id} | Pt={gw.tx_power_dbm}dBm Gt={gw.antenna_gain_dbi}dBi "
                f"h={gw.antenna_height_m}m | 담당 Node: {cnt}개")
         folium.Marker(
             location=[gw.lat, gw.lon], tooltip=tip,
             icon=folium.Icon(color=marker_color, icon_color='white', icon='broadcast-tower', prefix='fa'),
-            draggable=True,
+            draggable=True, opacity=DIM_OPACITY if dimmed else 1.0,
         ).add_to(gw_lyr)
     gw_lyr.add_to(m)
 

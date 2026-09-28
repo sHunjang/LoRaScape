@@ -98,3 +98,25 @@ def test_build_heatmap_layer_dict_accepts_smooth_factor():
     grid = _make_grid(pr_values)
     layer = build_heatmap_layer_dict(grid, smooth_factor=2)
     assert layer["url"].startswith("data:image/png;base64,")
+
+
+def test_pr_to_alpha_scales_with_opacity():
+    from lorascape.gui.widgets.heatmap_render import _pr_to_alpha
+    full = _pr_to_alpha(-75, opacity=1.0)
+    half = _pr_to_alpha(-75, opacity=0.5)
+    assert half == int(full * 0.5)
+
+
+def test_pr_to_alpha_zero_opacity_is_fully_transparent():
+    from lorascape.gui.widgets.heatmap_render import _pr_to_alpha
+    assert _pr_to_alpha(-75, opacity=0.0) == 0
+
+
+def test_render_heatmap_image_opacity_reduces_alpha_channel():
+    pr_values = np.full((5, 5), -75.0)
+    grid = _make_grid(pr_values)
+
+    rgba_full = render_heatmap_image(grid, base_color=(255, 0, 0), opacity=1.0, smooth_factor=1)
+    rgba_half = render_heatmap_image(grid, base_color=(255, 0, 0), opacity=0.5, smooth_factor=1)
+
+    assert rgba_half[0, 0, 3] < rgba_full[0, 0, 3]

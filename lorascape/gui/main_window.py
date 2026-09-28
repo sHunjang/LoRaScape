@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         self.map_widget = MapWidget()
         self.result_panel = ResultPanel()
+        self.result_panel.btn_show_heatmap.clicked.connect(self._on_show_result_heatmap_clicked)
         self.result_panel.setMaximumWidth(260)
         self.result_panel.setMinimumWidth(220)
 
@@ -178,11 +179,6 @@ class MainWindow(QMainWindow):
 
 
     def _on_selected_coverage_requested(self, gw_ids: list):
-        """
-        GW목록창에서 특정 GW들만 골라 '선택 커버리지'를 눌렀을 때임.
-        빈 리스트면 히트맵을 지우고 전체 마커만 다시 보여줌.
-        선택된 GW들의 격자 히트맵을 계산해서(무거운 연산이라 워커로 분리) 지도에 얹음.
-        """
         if not gw_ids:
             self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
             self.status_label.setText("전체 GW 표시로 복귀")
@@ -198,24 +194,33 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"선택된 GW {len(gw_ids)}개 히트맵 계산 중...")
 
         worker = HeatmapWorker(
-            selected_gateways, self.dem_path,
+            selected_gateways, self.nodes, self.dem_path,  # ★ self.nodes 추가 전달
             grid_size=self._settings.get("heatmap_grid_size", 40),
             analysis_settings=self._settings,
         )
         worker.progress.connect(
             lambda pct, msg: self.map_widget.update_loading_text(f"{msg} ({pct}%)")
         )
-        self._start_worker(worker, lambda layers: self._on_heatmap_done(layers, gw_ids),
+        self._start_worker(worker, lambda layers, result: self._on_heatmap_done(layers, result, gw_ids),
                             error_slot=self._on_heatmap_error)
 
-    def _on_heatmap_done(self, layers: list, gw_ids: list):
+
+    def _on_heatmap_done(self, layers: list, result, gw_ids: list):
+        """
+        ★ result가 이제 전체 최적화 결과(last_result)가 아니라, 방금 선택한 GW들만
+        기준으로 새로 계산된 OptimizationResult임 - 그래서 히트맵 안의 Node가
+        실제로 초록색(커버됨)으로 정확히 표시됨.
+        """
         self.map_widget.hide_loading()
         self.map_widget.refresh(
-            gws=self.gateways, nodes=self.nodes, result=self.last_result,
+            gws=self.gateways, nodes=self.nodes, result=result,
             heatmaps=layers, selected_gws=gw_ids,
-            settings=self._settings,  # ★ 추가: heatmap_opacity가 실제로 반영되도록
         )
-        self.status_label.setText(f"선택된 GW {len(gw_ids)}개 커버리지 히트맵 표시 중")
+        covered = sum(1 for c in result.connections.values() if c is not None)
+        self.status_label.setText(
+            f"선택된 GW {len(gw_ids)}개 커버리지 표시 중 — Node {covered}/{len(self.nodes)}개 커버"
+        )
+
 
     def _on_heatmap_error(self, message: str):
         self.map_widget.hide_loading()
@@ -426,15 +431,50 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"클릭: ({lon:.5f}, {lat:.5f})")
 
 
+    @staticmethod
+    def _find_by_id(items: list, attr: str, raw_id: str):
+        """
+        드래그된 마커의 id로 목록에서 항목을 찾음. 정확히 일치하는 게 없으면
+        툴팁 형식("GW1 | Pt=14..." 처럼 ' |' 앞부분)일 경우를 대비해 앞부분만 잘라서 다시 찾음.
+        """
+        raw_id = str(raw_id)
+        for item in items:
+            if getattr(item, attr) == raw_id:
+                return item
+        head = raw_id.split(" |")[0].strip()
+        for item in items:
+            if getattr(item, attr) == head:
+                return item
+        return None
+
     def _on_gw_dragged(self, gw_id, lon, lat):
         """
-        GW를 드래그해서 위치를 옮겼을 때임. 지금은 로그만 남기고, 실제로
-        gateways 리스트의 좌표를 갱신하는 로직은 다음 단계에서 붙일 예정임.
+        지도에서 GW 마커를 옮기면 해당 GW의 위경도를 실제 데이터에 반영함.
+        지도는 다시 그리지 않음 - 다시 그리면 사용자가 보던 확대/이동 상태가 초기화되고,
+        마커는 이미 새 위치에 놓여 있으므로 데이터만 맞추면 됨.
         """
-        self.status_label.setText(f"{gw_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
+        gw = self._find_by_id(self.gateways, "gw_id", gw_id)
+        if gw is None:
+            self.status_label.setText(f"이동한 GW를 목록에서 찾지 못했습니다: {gw_id}")
+            return
+        gw.lat, gw.lon = lat, lon
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        self.status_label.setText(
+            f"{gw.gw_id} 위치 변경: ({lat:.6f}, {lon:.6f}) — 커버리지는 다시 계산해야 반영됩니다"
+        )
 
     def _on_node_dragged(self, node_id, lon, lat):
-        self.status_label.setText(f"{node_id} 이동: ({lon:.5f}, {lat:.5f}) — 반영은 다음 단계에서 지원 예정")
+        node = self._find_by_id(self.nodes, "node_id", node_id)
+        if node is None:
+            self.status_label.setText(f"이동한 단말을 목록에서 찾지 못했습니다: {node_id}")
+            return
+        node.lat, node.lon = lat, lon
+        if self._node_list_win is not None:
+            self._node_list_win.set_nodes(self.nodes)
+        self.status_label.setText(
+            f"{node.node_id} 위치 변경: ({lat:.6f}, {lon:.6f}) — 커버리지는 다시 계산해야 반영됩니다"
+        )
 
 
 
@@ -756,3 +796,31 @@ class MainWindow(QMainWindow):
         if win.exec_() != win.Accepted:
             self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
             self.status_label.setText("제안이 취소되었습니다.")
+            
+
+    def _on_show_result_heatmap_clicked(self):
+        """
+        결과패널의 '이 결과를 히트맵으로 보기' 버튼임. 방금 실행된 최적화 결과에
+        쓰인 GW 전체를 대상으로 기존 '선택 커버리지' 파이프라인을 그대로 재사용함
+        (중복 로직 없이, 대상 GW id 목록만 다르게 넘기는 방식).
+
+        GW가 많으면(예: 35개) 히트맵 계산이 상당히 오래 걸릴 수 있어서, 실행 전에
+        경고를 한 번 띄움 - "검증 및 보강" 버튼 자체는 항상 마커로 빠르게 결과를
+        보여주고, 히트맵은 사용자가 명시적으로 원할 때만 계산하는 구조를 유지함.
+        """
+        if self.last_result is None or not self.last_result.gateways:
+            return
+
+        gw_ids = [gw.gw_id for gw in self.last_result.gateways]
+
+        if len(gw_ids) > 10:
+            reply = QMessageBox.question(
+                self, "확인",
+                f"GW {len(gw_ids)}개 전체의 히트맵을 계산합니다. GW 수가 많아 "
+                f"시간이 다소 걸릴 수 있습니다. 계속할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self._on_selected_coverage_requested(gw_ids)

@@ -15,11 +15,11 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from lorascape.gui.widgets.dialogs import NodeParamDialog, STYLE_DLG, DARK, PANEL, TEXT, MUTED, BORDER
 from lorascape.data.schema import NodeSite
 
-COLS = ["Node ID", "지역", "설치물 유형", "위도", "경도", "Gr(dBi)", "높이(m)"]
+COLS = ["Node ID", "지역", "설치물 유형", "위도", "경도", "최소수신(dBm)", "Gr(dBi)", "높이(m)"]
 
 CSV_FIELDS = [
     "node_id", "region", "device_type", "lat", "lon",
-    "antenna_gain_dbi", "cable_loss_db", "antenna_height_m", "indoor_loss_db",
+    "min_rx_dbm", "antenna_gain_dbi", "cable_loss_db", "antenna_height_m", "indoor_loss_db",
 ]
 
 TOOLBAR_BTN_STYLE = (
@@ -98,8 +98,12 @@ class NodeListWindow(QDialog):
         for node in self.nodes:
             r = self.tbl.rowCount()
             self.tbl.insertRow(r)
+            # ★ COLS 순서(...위도, 경도, 최소수신, Gr, 높이)에 맞춰 값도 같은 순서로 정렬함.
+            # 예전엔 Gr, 높이, 최소수신 순으로 넣고 있어서 컬럼이 한 칸씩 밀려 보이는
+            # 버그가 있었음 (데이터 자체는 정확했지만 화면 표시만 어긋남).
             values = [node.node_id, node.region, node.device_type,
                       f"{node.lat:.6f}", f"{node.lon:.6f}",
+                      f"{node.min_rx_dbm:.1f}",
                       f"{node.antenna_gain_dbi:.1f}", f"{node.antenna_height_m:.1f}"]
             for c, v in enumerate(values):
                 self.tbl.setItem(r, c, QTableWidgetItem(v))
@@ -219,6 +223,7 @@ class NodeListWindow(QDialog):
                         lon=float(row["lon"]),
                         device_type=row.get("device_type", ""),
                         install_type="CSV 가져오기",
+                        min_rx_dbm=float(row.get("min_rx_dbm", -100.0)),
                         antenna_gain_dbi=float(row.get("antenna_gain_dbi", 0.0)),
                         cable_loss_db=float(row.get("cable_loss_db", 0.0)),
                         antenna_height_m=float(row.get("antenna_height_m", 1.5)),

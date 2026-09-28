@@ -10,6 +10,7 @@ import sys
 from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
+from lorascape.gui.theme import POPUP_STYLE
 from lorascape.gui.main_window import MainWindow, _styled_message_box
 from lorascape.gui.widgets.initial_setup_dialog import InitialSetupDialog
 from lorascape.gui.widgets.splash_screen import SplashScreen
@@ -33,6 +34,7 @@ def _ensure_licensed(app) -> bool:
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyleSheet(POPUP_STYLE)
 
     if not _ensure_licensed(app):
         sys.exit(0)  # 인증 취소 시 조용히 종료함
