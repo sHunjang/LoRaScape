@@ -86,6 +86,32 @@ class DemLoader:
 
         return profile
 
+
+    def get_elevations_batch(self, lats, lons) -> np.ndarray:
+        """
+        여러 지점의 고도를 한 번에 조회함. lats/lons는 같은 shape의 배열이고 같은 shape로 반환함.
+        get_elevation()과 동일한 규칙(DEM 범위 밖/nodata는 0.0)을 씀 - get_elevation_profile이
+        구멍을 0.0으로 채우는 것과 결과가 같아야 히트맵이 예전 계산과 일치함.
+        좌표변환을 지점마다 부르지 않고 배열로 한 번에 처리하는 게 핵심임.
+        """
+        lats = np.asarray(lats, dtype=float)
+        lons = np.asarray(lons, dtype=float)
+        xs, ys = rio_transform("EPSG:4326", self.crs, lons.ravel().tolist(), lats.ravel().tolist())
+        cols_f, rows_f = ~self.dataset.transform * (np.asarray(xs), np.asarray(ys))
+        rows = np.floor(rows_f).astype(int)
+        cols = np.floor(cols_f).astype(int)
+
+        h, w = self._band.shape
+        valid = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
+
+        out = np.zeros(rows.shape, dtype=float)
+        vals = self._band[rows[valid], cols[valid]].astype(float)
+        if self._nodata is not None:
+            vals[vals == self._nodata] = 0.0
+        out[valid] = vals
+        return out.reshape(lats.shape)
+
+
     def is_installable(self, lat: float, lon: float, min_elevation_diff: float = -5.0) -> bool:
         """
         K-means 후보지 보정용 함수임 (문서 3번 요구사항: '저지대/수면 등 설치 불가 지역'이면

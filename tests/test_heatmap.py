@@ -95,3 +95,32 @@ def test_heatmap_grid_progress_callback_not_called_when_none():
     # progress_callback=None이 기본값이라, 그냥 호출해서 에러 안 나는지만 확인함
     grid = compute_gw_heatmap_grid(gw, dem, radius_km=1.0, grid_size=10)
     assert grid is not None
+
+
+import os
+import numpy as np
+from lorascape.data.dem_loader import DemLoader
+
+SEONGNAM_DEM = "sample_data/seongnam/dem_build_seongnam_3857-2.img"
+
+
+def test_heatmap_grid_batch_path_matches_per_cell_path():
+    """배치 조회 경로와 기존 셀별 조회 경로가 같은 격자를 만드는지 확인함."""
+    if not os.path.exists(SEONGNAM_DEM):
+        import pytest
+        pytest.skip("성남시 DEM 샘플 파일이 없어서 건너뜀")
+
+    class NoBatch:
+        """get_elevations_batch를 숨겨서 기존 경로를 강제로 타게 하는 래퍼."""
+        def __init__(self, d):
+            self._d = d
+
+        def get_elevation_profile(self, *a, **k):
+            return self._d.get_elevation_profile(*a, **k)
+
+    gw = _make_gw("GW1", 37.40, 127.12)
+    with DemLoader(SEONGNAM_DEM) as dem:
+        batch = compute_gw_heatmap_grid(gw, dem, radius_km=1.0, grid_size=12)
+        legacy = compute_gw_heatmap_grid(gw, NoBatch(dem), radius_km=1.0, grid_size=12)
+
+    assert np.allclose(batch.pr_grid, legacy.pr_grid)
