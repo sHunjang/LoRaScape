@@ -69,7 +69,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,  # UPX 압축은 rasterio/Qt 계열 dll에서 종종 문제를 일으켜서 끔
-    console=True,  # ★ 처음엔 True로 - 에러 메시지를 콘솔에서 봐야 디버깅 가능함. 안정화되면 False로.
+    console=False,  # ★ 처음엔 True로 - 에러 메시지를 콘솔에서 봐야 디버깅 가능함. 안정화되면 False로.
     icon=None,
 )
 
