@@ -132,3 +132,35 @@ def test_load_secret_key_strips_bom(tmp_path):
 
     key = load_secret_key(str(key_file))
     assert key == b"my-test-secret-key"  # BOM 없는 순수 값이어야 함
+    
+
+def test_try_silent_login_uses_saved_key_path(isolated_config, monkeypatch, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    key_file = elsewhere / "license.key"
+    key_file.write_text(SECRET.decode())
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)          # 작업 폴더에는 키가 없음
+
+    company = "테스트 회사"
+    cfg = app_config.load_config()
+    cfg.update(license_company=company, license_code=generate_auth_code(SECRET, company),
+               license_key_path=str(key_file))
+    app_config.save_config(cfg)
+    assert try_silent_login() is True
+
+
+def test_license_dialog_verify_remembers_key_path(qapp, isolated_config, tmp_path):
+    key_file = tmp_path / "license.key"
+    key_file.write_text(SECRET.decode())
+    company = "테스트 회사"
+
+    dlg = LicenseDialog()
+    dlg._key_path = str(key_file)
+    dlg.e_company.setText(company)
+    dlg.e_user.setText("유저")
+    dlg.e_code.setText(generate_auth_code(SECRET, company))
+    dlg._verify()
+
+    assert app_config.load_config()["license_key_path"] == str(key_file)

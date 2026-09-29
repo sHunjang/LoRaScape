@@ -47,20 +47,19 @@ STYLE = f"""
 """
 
 
-def find_license_key_path() -> str:
+def find_license_key_path(saved_path: str = "") -> str:
     """
-    exe와 같은 폴더에서 license.key를 찾음. 실행 파일 기준 경로를 찾는 게
-    맞지만, 개발 중(python 스크립트 실행)에는 sys.executable이 python.exe를
-    가리켜서 의미가 없으니, 현재 작업 디렉터리도 같이 확인함.
-    못 찾으면 빈 문자열 반환 (호출부가 파일 선택창을 띄우게 함).
+    license.key를 찾음. 이전에 인증할 때 사용자가 고른 경로(saved_path)를 먼저 보고,
+    없으면 exe 옆 -> 현재 작업 폴더 순서로 찾음. 못 찾으면 빈 문자열을 반환함.
     """
     import sys
     candidates = [
+        saved_path,
         os.path.join(os.path.dirname(sys.executable), "license.key"),
         os.path.join(os.getcwd(), "license.key"),
     ]
     for path in candidates:
-        if os.path.exists(path):
+        if path and os.path.exists(path):
             return path
     return ""
 
@@ -78,7 +77,7 @@ def try_silent_login() -> bool:
     if not company or not code:
         return False
 
-    key_path = find_license_key_path()
+    key_path = find_license_key_path(cfg.get("license_key_path", ""))
     if not key_path:
         return False
 
@@ -102,7 +101,7 @@ class LicenseDialog(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
 
         self._cfg = load_config()
-        self._key_path = find_license_key_path()
+        self._key_path = find_license_key_path(self._cfg.get("license_key_path", ""))
         self._build()
 
     def _build(self):
@@ -194,6 +193,7 @@ class LicenseDialog(QDialog):
             self._cfg["license_company"] = company
             self._cfg["license_user"] = user
             self._cfg["license_code"] = code
+            self._cfg["license_key_path"] = self._key_path
             save_config(self._cfg)
             self.accept()
         else:

@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-from lorascape.gui.app_config import load_config, save_config
+from lorascape.gui.app_config import load_config, save_config, update_config
+
 
 DARK = "#181b22"
 PANEL = "#1e2130"
@@ -165,13 +166,12 @@ class InitialSetupDialog(QDialog):
     def _accept(self):
         if not self._validate():
             return
-        config = {
-            "shp_path": self.e_shp.text(),
-            "dem_path": self.e_dem.text(),
-            "dsm_path": self.e_dsm.text(),
-            "xlsx_path": self._cfg.get("xlsx_path", ""),  # 목록창에서 마지막으로 불러온 엑셀 경로를 그대로 보존함
-        }
-        save_config(config)
+        # 4개 항목만 새로 저장하면 인증 정보와 분석 설정이 지워짐 - 바뀐 항목만 갱신함
+        config = update_config(
+            shp_path=self.e_shp.text(),
+            dem_path=self.e_dem.text(),
+            dsm_path=self.e_dsm.text(),
+        )
         self._result_config = config
         self.accept()
 
