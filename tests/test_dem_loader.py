@@ -105,7 +105,7 @@ def test_elevation_profile_matches_per_point_lookup():
     from lorascape.data.coord_transform import distance_m
 
     lat1, lon1, lat2, lon2, n = 37.40, 127.10, 37.43, 127.14, 20
-    with DemLoader(DEM_PATH) as dem:
+    with DemLoader(DEM_PATH, fill_holes=False) as dem:
         prof = dem.get_elevation_profile(lat1, lon1, lat2, lon2, n)
         total = distance_m(lat1, lon1, lat2, lon2)
         for i, (d, e) in enumerate(prof):

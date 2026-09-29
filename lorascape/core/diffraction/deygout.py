@@ -40,12 +40,25 @@ def diffraction_loss_j(v: float) -> float:
         return 13.0 + 20 * math.log10(v)
 
 
+def _rebase_distances(sub_profile: list) -> list:
+    """
+    구간의 첫 지점을 거리 0으로 다시 맞춘 프로파일을 반환함 (원본은 건드리지 않음).
+    프로파일의 거리는 '전체 경로의 시작점' 기준이라, 뒤쪽 구간(주 장애물~Node)을 그대로
+    쓰면 LOS 보간 비율과 d1이 틀어짐 - 구간 계산 전에 반드시 이걸 거쳐야 함.
+    """
+    d0 = sub_profile[0][0]
+    return [(d - d0, e) for d, e in sub_profile]
+
+
 def _line_of_sight_height(profile: list, tx_height: float, rx_height: float) -> list:
     """
     profile의 각 지점에서 '시선(LOS) 직선 대비 얼마나 튀어나왔는지(h_eff)'를 계산하는 내부 함수임.
 
     profile: [(거리_m, 지면고도_m), ...] - dem_loader.get_elevation_profile()이 주는 형태 그대로.
-    tx_height, rx_height: GW/Node 각각의 '지면 기준 안테나 높이'임 (schema.py의 antenna_height_m).
+             거리는 이 profile의 첫 지점이 0이어야 함 (구간을 잘라 쓸 때는 _rebase_distances 사용).
+    tx_height, rx_height: 첫/끝 지점의 '고도값 위로 얼마나 띄웠는지'임.
+             GW/Node는 각자의 안테나 높이(schema.py의 antenna_height_m)이고,
+             주 장애물 꼭대기를 끝점으로 쓸 때는 0임 (profile의 고도가 이미 꼭대기 높이라서).
 
     반환값: [(거리_m, h_eff_m), ...] - h_eff가 양수면 장애물이 LOS를 뚫고 올라온 거고,
             음수면 LOS 아래에 있는 거임 (=장애물 아님).
@@ -70,8 +83,10 @@ def _line_of_sight_height(profile: list, tx_height: float, rx_height: float) -> 
             t = dist / d_total
             los_height = tx_abs + (rx_abs - tx_abs) * t
 
-        # 장애물 꼭대기(지면고도, 여긴 건물높이는 반영 안 하고 지형만 - TODO: 건물 DSM 반영 확장 가능)
-        # 가 LOS보다 위로 튀어나온 정도 = h_eff
+        # profile의 고도가 곧 이 지점의 장애물 꼭대기 높이임. DEM(지형)을 넘기면 지형만,
+        # 건물이 포함된 표면모델(DSM) 값을 넘기면 건물까지 반영됨 - 이 함수는 어느 쪽이든
+        # 그대로 동작함 (DSM을 실제로 연결하는 건 DemLoader 쪽 과제임).
+        # 이게 LOS보다 위로 튀어나온 정도 = h_eff
         h_eff = ground_elev - los_height
         result.append((dist, h_eff))
 
@@ -129,6 +144,14 @@ def deygout_recursive(
     _order: 내부적으로 재귀 깊이 추적용 (외부에서 호출할 땐 신경 안 써도 됨 - 기본값 그대로 두면 됨)
 
     반환값: 총 회절 손실 LD_t (dB). 장애물이 없으면 0.0을 반환함.
+
+    ★ 수정 이력: 2차 회절(주 장애물 기준으로 경로를 둘로 쪼개 다시 계산하는 부분)에 버그가 있었음.
+      (1) 주 장애물 꼭대기를 끝점으로 쓸 때 안테나 높이에 h_eff(LOS 대비 돌출량)를 넣고 있었음.
+          꼭대기 높이는 profile의 고도 자체라 높이는 0이어야 함 - 돌출량을 또 더해서 끝점이
+          실제보다 h_eff만큼 높게 계산됐음.
+      (2) 뒤쪽 구간(주 장애물~Node)의 거리가 전체 경로 기준 그대로라 LOS 보간과 d1이 틀렸음.
+      같은 지형에서 경로 방향만 뒤집어도 손실이 수십 dB 달라지는 증상으로 드러났음
+      (정방향/역방향 결과가 같아야 정상임 - tests/test_deygout_second_order.py).
     """
     profile_with_heff = _line_of_sight_height(profile, tx_height, rx_height)
 
@@ -151,25 +174,24 @@ def deygout_recursive(
         # 재귀 깊이 한계 도달 -> 1차 손실만 반환
         return loss_1st
 
-    # 주 장애물을 기준으로 경로를 GW~주장애물 / 주장애물~Node 두 구간으로 쪼갬
+    # 주 장애물 꼭대기를 새 끝점으로 삼아 경로를 GW~주장애물 / 주장애물~Node 두 구간으로 쪼갬.
+    # 뒤쪽 구간은 거리를 0부터 다시 시작하도록 맞춰야 함 (_rebase_distances 참고).
     left_profile = profile[: idx + 1]
-    right_profile = profile[idx:]
+    right_profile = _rebase_distances(profile[idx:])
 
     loss_2nd_total = 0.0
 
     # 왼쪽 구간(GW~주장애물)에 장애물이 2개 이상 있어야 2차 계산 의미가 있음 (양 끝점만 있으면 스킵)
     if len(left_profile) > 2:
-        left_heff = _line_of_sight_height(left_profile, tx_height, h_eff + 0.0)
-        # 주 장애물 지점의 '유효 높이'를 왼쪽 구간의 끝점(수신단) 높이로 씀.
-        # h_eff가 이미 LOS 대비 돌출량이라, 여기선 주 장애물 꼭대기의 절대높이를 다시 구해야 더 정확하지만
-        # 우선은 근사로 h_eff 자체를 오른쪽 끝 높이로 사용함 (TODO: 정밀도 개선 여지 있음).
+        # 주 장애물 꼭대기 = profile의 고도 자체이므로 그 끝점의 '띄운 높이'는 0임
+        left_heff = _line_of_sight_height(left_profile, tx_height, 0.0)
         sub_main = _find_main_obstacle(left_heff, fc_mhz)
         if sub_main is not None:
             _, v_sub, _, _, _ = sub_main
             loss_2nd_total += diffraction_loss_j(v_sub) + 7.0
 
     if len(right_profile) > 2:
-        right_heff = _line_of_sight_height(right_profile, h_eff + 0.0, rx_height)
+        right_heff = _line_of_sight_height(right_profile, 0.0, rx_height)
         sub_main = _find_main_obstacle(right_heff, fc_mhz)
         if sub_main is not None:
             _, v_sub, _, _, _ = sub_main

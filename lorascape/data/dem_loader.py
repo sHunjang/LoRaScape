@@ -11,6 +11,7 @@ import rasterio
 
 from rasterio import warp as rio_warp
 from rasterio.warp import transform as rio_transform
+from scipy.ndimage import distance_transform_edt
 
 
 class DemLoader:
@@ -24,10 +25,17 @@ class DemLoader:
     이게 그대로 곱해져서 심각한 병목이었음.
     지금은 __init__ 시점에 밴드 전체를 딱 한 번 numpy 배열로 캐싱해두고,
     이후 조회는 전부 메모리 인덱싱만 함.
+
+    fill_holes: 지형 프로파일(전파 계산용)에서 값이 없는 칸(nodata, 예: 수면)을 가장 가까운
+    유효한 칸의 고도로 채울지 여부임 (기본 True). 예전에는 0m로 채웠는데, 성남시처럼 고도가
+    20~335m인 지역에서 GW/단말이 값 없는 칸에 걸리면 LOS가 땅 밑으로 꺼져서 평지에서도 큰 회절손실이
+    생겼음. get_elevation()/is_installable()은 '값이 없음'을 그대로 알려줘야 해서 이 옵션의 영향을
+    받지 않음. False로 두면 예전 동작(0m로 채움)이 됨.
     """
 
-    def __init__(self, dem_path: str):
+    def __init__(self, dem_path: str, fill_holes: bool = True):
         self.dem_path = dem_path
+        self.fill_holes = fill_holes
         self.dataset = rasterio.open(dem_path)
         self.crs = self.dataset.crs
 
@@ -37,11 +45,43 @@ class DemLoader:
         # 캐싱하는 방식(타일 캐시)으로 확장이 필요할 수 있음 - 지금은 오버엔지니어링이라 안 함.
         self._band = self.dataset.read(1)
         self._nodata = self.dataset.nodata
+        self._band_filled = None  # 구멍을 메운 배열 - 처음 필요할 때 한 번만 계산함 (_filled_band)
+
+    @staticmethod
+    def _hole_mask(band: np.ndarray, nodata) -> np.ndarray:
+        """값이 없는 칸(nodata 값, 또는 NaN)을 True로 표시한 마스크를 만듦."""
+        mask = np.zeros(band.shape, dtype=bool)
+        if nodata is not None and not np.isnan(nodata):
+            mask |= (band == nodata)
+        if np.issubdtype(band.dtype, np.floating):
+            mask |= np.isnan(band)
+        return mask
+
+    @classmethod
+    def _fill_holes(cls, band: np.ndarray, nodata) -> np.ndarray:
+        """
+        값 없는 칸을 가장 가까운 유효한 칸의 값으로 채운 배열을 반환함 (원본은 건드리지 않음).
+        구멍이 없으면 원본을 그대로 돌려줌. 구멍이 큰 래스터에서는 임시로 메모리를 꽤 씀
+        (칸마다 가장 가까운 유효 칸의 좌표 2개를 들고 있어야 해서) - 성남시 DEM 정도 크기는 문제없음.
+        """
+        mask = cls._hole_mask(band, nodata)
+        if not mask.any():
+            return band
+        if mask.all():
+            return np.zeros(band.shape, dtype=float)   # 쓸 수 있는 값이 하나도 없는 래스터
+        nearest = distance_transform_edt(mask, return_distances=False, return_indices=True)
+        return band[tuple(nearest)]
+
+    def _filled_band(self) -> np.ndarray:
+        if self._band_filled is None:
+            self._band_filled = self._fill_holes(self._band, self._nodata)
+        return self._band_filled
 
     def get_elevation(self, lat: float, lon: float) -> float:
         """
         위경도(WGS84) 좌표 하나 받아서 그 지점의 고도값(m)을 반환함.
         캐싱된 배열(self._band)에서 인덱싱만 하니까 디스크 I/O가 전혀 없음.
+        DEM 범위 밖이거나 값이 없는 칸이면 None임 (구멍을 메우지 않음).
         """
         xs, ys = rio_transform("EPSG:4326", self.crs, [lon], [lat])
         x, y = xs[0], ys[0]
@@ -65,7 +105,7 @@ class DemLoader:
 
         샘플 좌표를 한꺼번에 get_elevations_batch로 조회함. 예전엔 샘플마다 get_elevation을
         불러서 지점당 rasterio 환경 진입/좌표변환 비용이 반복됐음 (히트맵 프로파일링에서 확인).
-        DEM 범위 밖/nodata는 예전과 같이 0.0으로 채워짐.
+        값 없는 칸은 fill_holes에 따라 이웃 값으로 채워지고(기본), DEM 범위 밖은 0.0임.
         """
         from lorascape.data.coord_transform import distance_m
 
@@ -78,23 +118,23 @@ class DemLoader:
     def get_elevations_batch(self, lats, lons) -> np.ndarray:
         """
         여러 지점의 고도를 한 번에 조회함. lats/lons는 같은 shape의 배열이고 같은 shape로 반환함.
-        get_elevation()과 동일한 규칙(DEM 범위 밖/nodata는 0.0)을 씀 - get_elevation_profile이
-        구멍을 0.0으로 채우는 것과 결과가 같아야 히트맵이 예전 계산과 일치함.
-        좌표변환을 지점마다 부르지 않고 배열로 한 번에 처리하는 게 핵심임.
+        DEM 범위 밖은 0.0이고, 값 없는 칸은 fill_holes=True면 가장 가까운 유효 칸의 고도,
+        False면 0.0임. 좌표변환을 지점마다 부르지 않고 배열로 한 번에 처리하는 게 핵심임.
         """
         lats = np.asarray(lats, dtype=float)
         lons = np.asarray(lons, dtype=float)
         xs, ys = rio_transform("EPSG:4326", self.crs, lons.ravel().tolist(), lats.ravel().tolist())
-        cols_f, rows_f = ~self.dataset.transform * (np.asarray(xs), np.asarray(ys))
+        cols_f, rows_f = ~self.dataset.transform @ (np.asarray(xs), np.asarray(ys))
         rows = np.floor(rows_f).astype(int)
         cols = np.floor(cols_f).astype(int)
 
         h, w = self._band.shape
         valid = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
 
+        band = self._filled_band() if self.fill_holes else self._band
         out = np.zeros(rows.shape, dtype=float)
-        vals = self._band[rows[valid], cols[valid]].astype(float)
-        if self._nodata is not None:
+        vals = band[rows[valid], cols[valid]].astype(float)
+        if not self.fill_holes and self._nodata is not None:
             vals[vals == self._nodata] = 0.0
         out[valid] = vals
         return out.reshape(lats.shape)
@@ -105,14 +145,15 @@ class DemLoader:
         K-means 후보지 보정용 함수임 (문서 3번 요구사항: '저지대/수면 등 설치 불가 지역'이면
         군집 내 가장 가까운 유효 지점으로 이동해야 함 - 그 판정을 이 함수가 담당함).
 
-        지금은 아주 단순하게 '고도값이 없거나(수면/구멍) 비정상적으로 낮으면 설치 불가'로만 판정함.
-        TODO: 실제로는 하천 범람 구역, 경사도, 접근성 등 조건이 더 필요할 수 있음 -
-              일단 뼈대만 만들어두고 나중에 조건 추가하는 구조로 감.
+        지금은 '고도값이 있는 곳(= DEM 범위 안이고 수면/구멍이 아닌 곳)이면 설치 가능'으로만 판정함.
+        하천 범람 구역, 경사도, 접근성 같은 조건은 판정에 필요한 자료(범람 지도, 도로망 등)가 없어서
+        일부러 넣지 않았음 - 요구사항과 자료가 생기면 이 함수에 조건을 추가하면 됨.
+        min_elevation_diff는 예전에 쓰려다 만 인자라 지금은 아무 영향이 없음 (호환성 때문에 남겨둠).
         """
         elevation = self.get_elevation(lat, lon)
         if elevation is None:
             return False  # DEM 범위 밖이거나 nodata면 설치 불가로 간주
-        return True  # 지금은 고도값만 있으면 일단 설치 가능으로 판정 (추후 조건 강화 필요)
+        return True
 
 
     def read_elevation_grid(
