@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "license_company": "",
     "license_user": "",
     "license_code": "",
+    "license_key_path": "",   # 인증 때 사용자가 고른 license.key 경로 - 다음 실행에서 자동 로그인에 씀
 }
 
 
@@ -63,3 +64,15 @@ def save_config(config: dict):
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def update_config(**changes) -> dict:
+    """
+    저장된 설정을 읽어서 일부 항목만 바꿔 저장함. 나머지 항목(인증 정보, 분석 설정 등)은 그대로 보존됨.
+    화면마다 자기 항목만 담은 새 딕셔너리를 save_config로 저장하면 다른 항목이 지워지므로,
+    일부 항목만 바꿀 때는 이 함수를 써야 함 (초기설정창이 인증 정보를 지운 버그의 원인이었음).
+    """
+    cfg = load_config()
+    cfg.update(changes)
+    save_config(cfg)
+    return cfg

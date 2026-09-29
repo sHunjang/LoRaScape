@@ -66,3 +66,13 @@ def test_heatmap_grid_size_presets_include_default():
     default_size = app_config.DEFAULT_CONFIG["heatmap_grid_size"]
     preset_sizes = [size for size, _ in app_config.HEATMAP_GRID_SIZE_PRESETS]
     assert default_size in preset_sizes
+
+
+def test_update_config_preserves_other_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_config, "CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(app_config, "CONFIG_PATH", str(tmp_path / "config.json"))
+    app_config.save_config({**app_config.load_config(), "license_company": "회사", "fc_mhz": 915.0})
+    app_config.update_config(shp_path="a.shp")
+    saved = app_config.load_config()
+    assert saved["shp_path"] == "a.shp"
+    assert saved["license_company"] == "회사" and saved["fc_mhz"] == 915.0
