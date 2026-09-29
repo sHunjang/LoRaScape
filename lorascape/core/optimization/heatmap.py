@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from lorascape.data.coord_transform import distance_m
-from lorascape.core.propagation.song_model import path_loss as song_path_loss
+from lorascape.core.propagation.models import base_path_loss
 from lorascape.core.diffraction.deygout import deygout_recursive
 from lorascape.core.linkbudget.link_budget import rx_power_dbm
 
@@ -31,7 +31,7 @@ class HeatmapGrid:
     bounds: tuple                # (lat_min, lat_max, lon_min, lon_max)
 
 
-def compute_gw_heatmap_grid(
+def compute_gw_heatmap_grid(    
     gw,
     dem,
     node_antenna_height_m: float = 1.5,
@@ -41,6 +41,7 @@ def compute_gw_heatmap_grid(
     environment: str = "urban",
     n_profile_samples: int = 10,
     progress_callback=None,
+    propagation_model: str = "song",
 ) -> HeatmapGrid:
     """
     GW 하나를 중심으로 radius_km 반경 정사각형을 grid_size x grid_size 격자로 나눠
@@ -79,7 +80,8 @@ def compute_gw_heatmap_grid(
             d_km_raw = distance_m(gw.lat, gw.lon, lat, lon) / 1000.0
             d_km = max(d_km_raw, 0.01)  # GW 바로 위 지점의 log10(0) 방지
 
-            base_pl = song_path_loss(fc_mhz, gw.antenna_height_m, node_antenna_height_m, d_km, environment)
+            base_pl = base_path_loss(propagation_model, fc_mhz, gw.antenna_height_m,
+                                     node_antenna_height_m, d_km, environment)
 
             if use_batch:
                 total = d_km_raw * 1000.0  # 기존 get_elevation_profile과 같은 실제 거리 기준

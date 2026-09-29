@@ -18,7 +18,8 @@ from lorascape.gui.workers import (
     ReportWorker,
 )
 
-from lorascape.gui.app_config import load_config
+from lorascape.gui.app_config import load_config, analysis_settings_changed
+from lorascape.core.propagation.models import model_label
 
 
 DARK = "#181b22"
@@ -92,6 +93,10 @@ class MainWindow(QMainWindow):
         self._report_win = None
 
         self._settings_win = None
+
+        # 마지막 검증 결과를 만들 때의 분석 설정 스냅샷임. 검증 뒤에 설정(전파 모델 등)이 바뀌어도
+        # 보고서는 결과를 만든 설정으로 계산해야 결과와 어긋나지 않음.
+        self._last_result_settings: dict = {}
 
         self._measuring = False
         self._measure_points: list = []  # [(lon, lat), ...]
@@ -374,12 +379,14 @@ class MainWindow(QMainWindow):
         self._start_worker(worker, self._on_optimize_done, error_slot=self._on_optimize_error)
 
     def _on_optimize_done(self, result):
+        self._last_result_settings = dict(self._settings)
         self.last_result = result
         self._active_heatmap_gw_ids = []   # 지도가 히트맵 없이 다시 그려지므로, 드래그 자동 재계산 대상도 비움
         self.map_widget.hide_loading()
         self.result_panel.show_result(result, len(self.nodes))
 
         msg = f"검증 완료 — GW {result.k}개, 커버리지 {result.coverage_ratio*100:.1f}%"
+        msg += f" [{model_label(self._settings.get('propagation_model', 'song'))}]"
         if not result.target_met:
             target = self._settings.get("coverage_target", 0.9)
             msg += f" (목표 {target*100:.0f}% 미달 — '추가 설치 위치 제안'으로 보강 위치를 확인하세요)"
@@ -506,8 +513,16 @@ class MainWindow(QMainWindow):
         self._settings_win.raise_()
 
     def _on_settings_changed(self, new_settings: dict):
+        """
+        설정이 바뀌면 반영하고 알려줌. 전파 모델, 주파수 같은 분석 설정이 바뀌면 화면에 떠 있는
+        검증 결과는 이전 설정으로 계산한 것이라, 다시 실행해야 한다고 안내함.
+        """
+        changed = analysis_settings_changed(self._settings, {**self._settings, **new_settings})
         self._settings.update(new_settings)
-        self.status_label.setText("분석 설정이 갱신되었습니다.")
+        if changed and self.last_result is not None:
+            self.status_label.setText("분석 설정이 바뀌었습니다 — 결과에 반영하려면 'GW 배치 검증'을 다시 실행하세요.")
+        else:
+            self.status_label.setText("분석 설정이 갱신되었습니다.")
 
 
     # ── 우클릭 컨텍스트 메뉴 ──────────────────────────────────
@@ -733,6 +748,7 @@ class MainWindow(QMainWindow):
         if not suggested:
             self.status_label.setText("이미 목표 커버리지를 달성했습니다 — 추가 설치가 필요 없습니다.")
             self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=result)
+            self._last_result_settings = dict(self._settings)   # 이 결과도 보고서의 기준이 되므로 설정을 같이 저장함
             self.last_result = result
             self.result_panel.show_result(result, len(self.nodes))
             return
@@ -847,8 +863,13 @@ class MainWindow(QMainWindow):
     # ── 리포트 창 ──────────────────────────────────────────────
 
     def _report_is_stale(self) -> bool:
-        """마지막 검증 이후 GW/단말 목록이 바뀌었는지 확인함 (개수·ID 기준, 위치 이동은 감지 못 함)."""
+        """
+        마지막 검증 이후 GW/단말 목록(개수·ID 기준, 위치 이동은 감지 못 함) 또는
+        분석 설정(전파 모델, 주파수 등)이 바뀌었는지 확인함.
+        """
         r = self.last_result
+        if self._last_result_settings and analysis_settings_changed(self._last_result_settings, self._settings):
+            return True
         return (set(r.connections) != {n.node_id for n in self.nodes}
                 or {g.gw_id for g in r.gateways} != {g.gw_id for g in self.gateways if g.enabled})
 
@@ -865,7 +886,7 @@ class MainWindow(QMainWindow):
         if self._report_is_stale():
             reply = QMessageBox.question(
                 self, "확인",
-                "마지막 검증 이후 GW/단말 목록이 바뀌었습니다.\n이전 검증 결과 기준으로 보고서를 만들까요?\n"
+                "마지막 검증 이후 GW/단말 목록 또는 분석 설정이 바뀌었습니다.\n이전 검증 결과 기준으로 보고서를 만들까요?\n"
                 "(최신 상태로 보려면 'GW 배치 검증'을 다시 실행하세요)",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply != QMessageBox.Yes:
@@ -873,7 +894,8 @@ class MainWindow(QMainWindow):
 
         self.map_widget.show_loading("보고서 생성 중...")
         self.status_label.setText("보고서 생성 중...")
-        worker = ReportWorker(self.dem_path, self.last_result, self.nodes, self._settings)
+        worker = ReportWorker(self.dem_path, self.last_result, self.nodes,
+                              self._last_result_settings or self._settings)
         self._start_worker(worker, self._on_report_ready, error_slot=self._on_report_error)
 
     def _on_report_ready(self, report):

@@ -324,3 +324,23 @@ def test_evaluate_gateways_coverage_target_met_uses_given_target():
 
     r_default = evaluate_gateways_coverage([near, far], [gw], dem)   # 기본 목표 100%
     assert r_default.target_met is False
+
+
+def test_propagation_model_changes_path_loss():
+    gw, node, dem = _make_gw("G1", 37.4000, 127.1200), _make_node("N1", 37.4050, 127.1250), FakeFlatDem()
+    song = compute_total_path_loss(gw, node, dem, propagation_model="song")
+    cost = compute_total_path_loss(gw, node, dem, propagation_model="cost231")
+    assert song != pytest.approx(cost, abs=0.01)
+
+
+def test_entry_points_accept_propagation_model():
+    gw, dem = _make_gw("G1", 37.4000, 127.1200), FakeFlatDem()
+    node = _make_node("N1", 37.4030, 127.1200)
+    node.min_rx_dbm = -140.0                      # 두 모델 모두 연결되도록 하한을 풀어줌
+    c_song = evaluate_connection(gw, node, dem, propagation_model="song")
+    c_cost = evaluate_connection(gw, node, dem, propagation_model="cost231")
+    assert c_song.path_loss_db != pytest.approx(c_cost.path_loss_db, abs=0.01)
+    r = evaluate_gateways_coverage([node], [gw], dem, propagation_model="cost231")
+    assert r.connections["N1"].path_loss_db == pytest.approx(c_cost.path_loss_db)
+    optimize_gw_placement([node], dem, initial_k=1, max_k=2, coverage_target=1.0, propagation_model="cost231")
+    evaluate_and_augment([node], [gw], dem, max_additional=1, coverage_target=1.0, propagation_model="cost231")

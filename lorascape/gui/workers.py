@@ -12,6 +12,21 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from lorascape.data.dem_loader import DemLoader
 
 
+def _link_settings(s: dict) -> dict:
+    """
+    분석 설정 딕셔너리에서 링크 계산(전파 모델, 주파수, 환경, 대역폭, 잡음지수)에 쓰는 값을 한 곳에서 뽑음.
+    워커마다 이 다섯 값을 따로 나열하면 하나를 빼먹기 쉬워서(전파 모델 선택이 일부 계산에만
+    적용되는 사고가 나기 쉬움) 전부 이 함수를 거치게 함. 새 링크 설정이 생기면 여기에만 추가하면 됨.
+    """
+    return dict(
+        fc_mhz=s.get("fc_mhz", 920.0),
+        environment=s.get("environment", "urban"),
+        bandwidth_hz=s.get("bandwidth_hz", 125_000),
+        receiver_noise_figure_db=s.get("receiver_noise_figure_db", 6.0),
+        propagation_model=s.get("propagation_model", "song"),
+    )
+
+
 class LoadDataWorker(QObject):
     """
     엑셀 인벤토리를 백그라운드에서 로딩하는 워커임.
@@ -38,7 +53,7 @@ class LoadDataWorker(QObject):
             # 워커 스레드 안에서 예외가 나면 조용히 죽어버리니까, 반드시 시그널로
             # 메인 스레드에 전달해서 사용자에게 보여줘야 함.
             self.error.emit(str(e))
-            
+
 
 class HeatmapWorker(QObject):
     """
@@ -70,6 +85,7 @@ class HeatmapWorker(QObject):
             from lorascape.core.optimization.gw_placement import evaluate_gateways_coverage
             from lorascape.gui.widgets.heatmap_render import build_heatmap_layer_dict, get_gw_color
 
+            link = _link_settings(self.analysis_settings)
             multi_gw = len(self.gateways) > 1
             layers = []
             n_gws = len(self.gateways)
@@ -88,8 +104,9 @@ class HeatmapWorker(QObject):
                     grid = compute_gw_heatmap_grid(
                         gw, dem,
                         radius_km=self.radius_km, grid_size=self.grid_size,
-                        fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
-                        environment=self.analysis_settings.get("environment", "urban"),
+                        fc_mhz=link["fc_mhz"],
+                        environment=link["environment"],
+                        propagation_model=link["propagation_model"],
                         progress_callback=_on_cell_progress,
                     )
 
@@ -101,19 +118,13 @@ class HeatmapWorker(QObject):
                     layers.append(layer)
 
                 self.progress.emit(int(100 * n_gws / (n_gws + 1)), "선택 GW 기준 Node 연결 여부 계산 중...")
-                result = evaluate_gateways_coverage(
-                    self.nodes, self.gateways, dem,
-                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
-                    environment=self.analysis_settings.get("environment", "urban"),
-                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
-                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
-                )
+                result = evaluate_gateways_coverage(self.nodes, self.gateways, dem, **link)
 
             self.progress.emit(100, "완료")
             self.finished.emit(layers, result)
         except Exception as e:
             self.error.emit(str(e))
-            
+
 
 class SuggestAdditionalGWWorker(QObject):
     """
@@ -145,10 +156,7 @@ class SuggestAdditionalGWWorker(QObject):
                     self.nodes, self.existing_gateways, dem,
                     max_additional=self.max_additional,
                     coverage_target=self.coverage_target,
-                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
-                    environment=self.analysis_settings.get("environment", "urban"),
-                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
-                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                    **_link_settings(self.analysis_settings),
                 )
 
             # 결과의 gateways 중 기존 목록에 없던 것만 '새로 제안된 것'으로 분리함
@@ -185,15 +193,12 @@ class SuggestGreenfieldGWWorker(QObject):
                     self.nodes, dem,
                     initial_k=self.initial_k, max_k=self.max_k,
                     coverage_target=self.coverage_target,
-                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
-                    environment=self.analysis_settings.get("environment", "urban"),
-                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
-                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                    **_link_settings(self.analysis_settings),
                 )
             self.finished.emit(result, result.gateways)
         except Exception as e:
             self.error.emit(str(e))
-    
+
 
 class VerifyCoverageWorker(QObject):
     """
@@ -219,10 +224,7 @@ class VerifyCoverageWorker(QObject):
                 result = evaluate_gateways_coverage(
                     self.nodes, self.gateways, dem,
                     coverage_target=self.coverage_target,
-                    fc_mhz=self.analysis_settings.get("fc_mhz", 920.0),
-                    environment=self.analysis_settings.get("environment", "urban"),
-                    bandwidth_hz=self.analysis_settings.get("bandwidth_hz", 125_000),
-                    receiver_noise_figure_db=self.analysis_settings.get("receiver_noise_figure_db", 6.0),
+                    **_link_settings(self.analysis_settings),
                 )
             self.finished.emit(result)
         except Exception as e:
@@ -248,11 +250,8 @@ class ReportWorker(QObject):
             with DemLoader(self.dem_path) as dem:
                 report = build_coverage_report(
                     self.result, self.nodes, dem,
-                    fc_mhz=s.get("fc_mhz", 920.0),
-                    environment=s.get("environment", "urban"),
-                    bandwidth_hz=s.get("bandwidth_hz", 125_000),
-                    receiver_noise_figure_db=s.get("receiver_noise_figure_db", 6.0),
                     coverage_target=s.get("coverage_target", 0.9),
+                    **_link_settings(s),
                 )
             self.finished.emit(report)
         except Exception as e:
