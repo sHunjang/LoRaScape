@@ -14,6 +14,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from lorascape.core.propagation.models import model_label
+
 from lorascape.core.reporting.coverage_report import (
     SF_LEVELS, RELATION_CONNECTED, REASON_LABELS,
 )
@@ -72,6 +74,7 @@ def summary_pairs(report):
         ("사용 GW", str(report.gw_count)),
         ("반송 주파수", f"{p.get('fc_mhz', 0):.1f} MHz"),
         ("환경 분류", str(p.get("environment", ""))),
+        ("전파 모델", model_label(p.get("propagation_model", "song"))),
         ("대역폭", f"{p.get('bandwidth_hz', 0):.0f} Hz"),
         ("경로손실 한계", f"{p.get('max_path_loss_db', 0):.0f} dB"),
     ]

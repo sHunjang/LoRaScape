@@ -12,6 +12,9 @@ from PyQt5.QtCore import Qt, pyqtSignal
 
 from lorascape.gui.app_config import load_config, save_config, HEATMAP_GRID_SIZE_PRESETS
 
+from lorascape.core.propagation.models import PROPAGATION_MODELS, COST231_NOTE
+
+
 DARK = "#181b22"
 PANEL = "#1e2130"
 TEXT = "#e0e4ef"
@@ -79,6 +82,18 @@ class SettingsWindow(QDialog):
         note.setWordWrap(True)
         lay.addWidget(note)
 
+        self.cb_model = QComboBox()
+        for key, label in PROPAGATION_MODELS:
+            self.cb_model.addItem(label, userData=key)
+        idx = self.cb_model.findData(self._cfg["propagation_model"])
+        if idx >= 0:
+            self.cb_model.setCurrentIndex(idx)
+        self.lbl_model_note = QLabel(COST231_NOTE)
+        self.lbl_model_note.setWordWrap(True)
+        self.lbl_model_note.setStyleSheet(f"color:{MUTED};font-size:10px;")
+        self.cb_model.currentIndexChanged.connect(self._update_model_note)
+        self._update_model_note()
+
         grp1 = QGroupBox("전파 계산 파라미터")
         fl1 = QFormLayout(grp1)
         fl1.setSpacing(8)
@@ -111,7 +126,9 @@ class SettingsWindow(QDialog):
         fl1.addRow("반송 주파수", self.sp_fc)
         fl1.addRow("대역폭", self.sp_bw)
         fl1.addRow("수신기 잡음지수", self.sp_nf)
-        fl1.addRow("환경 분류 (Song's Model)", self.cb_env)
+        fl1.addRow("환경 분류", self.cb_env)
+        fl1.addRow("전파 모델", self.cb_model)
+        fl1.addRow(self.lbl_model_note)
         lay.addWidget(grp1)
 
         grp2 = QGroupBox("GW 배치 검증/보강 파라미터")
@@ -181,6 +198,9 @@ class SettingsWindow(QDialog):
 
     def _reset_defaults(self):
         from lorascape.gui.app_config import DEFAULT_CONFIG
+        idx = self.cb_model.findData(DEFAULT_CONFIG["propagation_model"])
+        if idx >= 0:
+            self.cb_model.setCurrentIndex(idx)
         self.sp_fc.setValue(DEFAULT_CONFIG["fc_mhz"])
         self.sp_bw.setValue(DEFAULT_CONFIG["bandwidth_hz"])
         self.sp_nf.setValue(DEFAULT_CONFIG["receiver_noise_figure_db"])
@@ -198,6 +218,7 @@ class SettingsWindow(QDialog):
 
     def _collect(self) -> dict:
         return {
+            "propagation_model": self.cb_model.currentData(),
             "fc_mhz": self.sp_fc.value(),
             "bandwidth_hz": self.sp_bw.value(),
             "receiver_noise_figure_db": self.sp_nf.value(),
@@ -214,3 +235,6 @@ class SettingsWindow(QDialog):
         save_config(self._cfg)
         self.sig_settings_changed.emit(new_settings)
         self.accept()
+
+    def _update_model_note(self, *_):
+        self.lbl_model_note.setVisible(self.cb_model.currentData() == "cost231")

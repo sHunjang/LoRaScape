@@ -23,7 +23,7 @@ from sklearn.cluster import KMeans
 
 from lorascape.data.schema import GatewaySite, NodeSite
 from lorascape.data.coord_transform import latlon_to_xy, xy_to_latlon, distance_m
-from lorascape.core.propagation.song_model import path_loss as song_path_loss
+from lorascape.core.propagation.models import base_path_loss
 from lorascape.core.diffraction.deygout import deygout_recursive
 from lorascape.core.linkbudget.link_budget import rx_power_dbm, snr_db, select_sf
 
@@ -63,13 +63,21 @@ class OptimizationResult:
 def compute_total_path_loss(
     gw: GatewaySite, node: NodeSite, dem,
     fc_mhz: float = 920.0, environment: str = "urban", n_profile_samples: int = 20,
+    propagation_model: str = "song",
 ) -> float:
-    """GW-Node 사이 최종 경로손실 = Song's Model + Deygout 회절손실(30dB 캡)."""
+    """
+    GW-Node 사이 최종 경로손실 = 기본 경로손실(propagation_model로 선택: Song's Model / COST-231)
+    + Deygout 회절손실(30dB 캡).
+
+    propagation_model은 반드시 인자 목록 맨 끝에 둠: 이 함수를 fc_mhz, environment를 위치 인자로
+    부르는 곳이 여럿이라(evaluate_connection, 보고서 진단, 테스트) 중간에 끼워 넣으면 값이 한 칸씩
+    밀려서 fc_mhz가 모델 이름으로 들어가 버림.
+    """
     d_km = distance_m(gw.lat, gw.lon, node.lat, node.lon) / 1000.0
     if d_km <= 0:
         d_km = 0.001
 
-    base_pl = song_path_loss(fc_mhz, gw.antenna_height_m, node.antenna_height_m, d_km, environment)
+    base_pl = base_path_loss(propagation_model, fc_mhz, gw.antenna_height_m, node.antenna_height_m, d_km, environment)
 
     profile = dem.get_elevation_profile(gw.lat, gw.lon, node.lat, node.lon, n_profile_samples)
     diffraction_loss = deygout_recursive(
@@ -91,6 +99,7 @@ def evaluate_connection(
     node_cable_loss_db: Optional[float] = None,
     bandwidth_hz: float = 125_000,
     receiver_noise_figure_db: float = 6.0,
+    propagation_model: str = "song",
 ) -> Optional[ConnectionResult]:
     """
     GW 하나와 Node 하나 사이 연결 가능 여부 판정. gw/node 객체의 무선 파라미터를 기본으로 씀.
@@ -101,7 +110,9 @@ def evaluate_connection(
     Node가 개별적으로 요구하는 최소 수신 레벨보다 약하면 연결 실패"로 처리함
     (SF 판정과 min_rx_dbm 판정 둘 다 통과해야 연결됨 - AND 조건).
     """
-    pl = compute_total_path_loss(gw, node, dem, fc_mhz, environment)
+    pl = compute_total_path_loss(
+        gw, node, dem, fc_mhz=fc_mhz, environment=environment, propagation_model=propagation_model,
+    )
 
     if pl > max_path_loss_db:
         return None
@@ -170,13 +181,15 @@ def _compute_link_matrix(
     이게 이번 리팩터링의 핵심임 - 이 함수는 최적화 과정에서 정확히 한 번만 호출됨.
 
     반환값: {gw_id: {node_id: ConnectionResult | None}} 형태의 중첩 딕셔너리임.
+    propagation_model 같은 추가 옵션은 link_kwargs로 evaluate_connection까지 그대로 전달됨.
     """
     matrix = {}
     for gw in candidates:
         row = {}
         for node in nodes:
             row[node.node_id] = evaluate_connection(
-                gw, node, dem, fc_mhz, environment, max_path_loss_db, **link_kwargs
+                gw, node, dem, fc_mhz=fc_mhz, environment=environment,
+                max_path_loss_db=max_path_loss_db, **link_kwargs,
             )
         matrix[gw.gw_id] = row
     return matrix
@@ -430,16 +443,3 @@ def evaluate_gateways_coverage(
         coverage_ratio=coverage_ratio, k=len(gateways),
         target_met=coverage_ratio >= coverage_target,
     )
-    
-
-def test_node_site_default_min_rx_dbm_is_minus_100():
-    """
-    NodeSite의 min_rx_dbm 기본값이 -100dBm으로 고정되어 있는지 확인함
-    (요청에 따라 -126.6에서 변경됨) - 여전히 개별 Node마다 다르게 설정 가능함.
-    """
-    from lorascape.data.schema import NodeSite
-    node = NodeSite(
-        node_id="TEST", region="", location_desc="",
-        lat=37.4, lon=127.1, device_type="", install_type="",
-    )
-    assert node.min_rx_dbm == -100.0

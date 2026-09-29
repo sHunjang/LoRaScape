@@ -12,6 +12,7 @@ CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".lorascape")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 DEFAULT_CONFIG = {
+    "propagation_model": "song",
     "shp_path": "",
     "dem_path": "",
     "dsm_path": "",
@@ -42,6 +43,11 @@ HEATMAP_GRID_SIZE_PRESETS = [
     (100, "100 x 100 (최고 정밀, 최고 느림)"),
     (150, "150 x 150 (초정밀, 수 분 이상 소요될 수 있음)"),
 ]
+
+
+# 분석 결과(연결 여부, 수신전력)에 영향을 주는 설정 키임. 이 값이 바뀌면 이전 검증 결과는 현재 설정으로 계산한 게 아님.
+ANALYSIS_KEYS = ("propagation_model", "fc_mhz", "bandwidth_hz", "environment", "receiver_noise_figure_db")
+
 
 
 def load_config() -> dict:
@@ -76,3 +82,7 @@ def update_config(**changes) -> dict:
     cfg.update(changes)
     save_config(cfg)
     return cfg
+
+def analysis_settings_changed(before: dict, after: dict) -> bool:
+    """두 설정 사이에 분석 결과에 영향을 주는 값이 다른지 확인함 (히트맵 진하기 같은 표시 설정은 무시함)."""
+    return any(before.get(k) != after.get(k) for k in ANALYSIS_KEYS)

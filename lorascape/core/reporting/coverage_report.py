@@ -9,6 +9,9 @@ Qt에 의존하지 않음 - 보고서 창(ReportWindow)과 내보내기(엑셀/C
 
 미커버 단말은 결과에 사유가 저장돼 있지 않아서, 각 GW에 대해 evaluate_connection과 같은 순서로
 다시 판정해서(diagnose_link) 가장 신호가 좋은 GW 기준으로 사유를 분류함.
+
+전파 모델(propagation_model)은 검증 때 쓴 것과 같은 값을 넘겨야 함 - 다르면 결과(연결 정보)는
+한 모델로, '수신만'/미커버 사유는 다른 모델로 계산돼서 보고서가 서로 어긋남.
 """
 from __future__ import annotations
 
@@ -122,12 +125,13 @@ class LinkDiagnosis:
 
 def diagnose_link(gw, node, dem, *, fc_mhz=920.0, environment="urban",
                   max_path_loss_db=DEFAULT_MAX_PATH_LOSS_DB, bandwidth_hz=125_000,
-                  receiver_noise_figure_db=6.0) -> LinkDiagnosis:
+                  receiver_noise_figure_db=6.0, propagation_model="song") -> LinkDiagnosis:
     """
     GW-단말 한 쌍이 왜 연결되거나 안 되는지 판정함. evaluate_connection과 같은 순서
     (경로손실 한계 -> 단말 최소 수신 레벨 -> SF/SNR)로 검사하고, 실패해도 수치는 계산해서 돌려줌.
     """
-    pl = compute_total_path_loss(gw, node, dem, fc_mhz, environment)
+    pl = compute_total_path_loss(gw, node, dem, fc_mhz=fc_mhz, environment=environment,
+                                 propagation_model=propagation_model)
     pr = rx_power_dbm(
         gw.tx_power_dbm, gw.antenna_gain_dbi, gw.cable_loss_db, pl,
         node.antenna_gain_dbi, node.cable_loss_db, indoor_penetration_loss_db=node.indoor_loss_db,
@@ -181,14 +185,17 @@ def _diagnose_uncovered(node, gws, dem, link_kw, max_path_loss_db) -> UncoveredR
 def build_coverage_report(result, nodes, dem, *, fc_mhz=920.0, environment="urban",
                           max_path_loss_db=DEFAULT_MAX_PATH_LOSS_DB, bandwidth_hz=125_000,
                           receiver_noise_figure_db=6.0, coverage_target=0.9,
+                          propagation_model="song",
                           now: Optional[datetime] = None) -> CoverageReport:
     """
     result: OptimizationResult (evaluate_gateways_coverage 결과)
     nodes:  NodeSite 목록 - 유형/지역/상세위치/좌표를 얻기 위해 필요함. result에 없는 단말은 제외함.
     dem:    '수신만' 관계의 수신전력과 미커버 사유를 다시 계산하는 데 씀 (get_elevation_profile 필요).
+    propagation_model: result를 만들 때 쓴 전파 모델과 같아야 함.
     """
     link_kw = dict(fc_mhz=fc_mhz, environment=environment, max_path_loss_db=max_path_loss_db,
-                   bandwidth_hz=bandwidth_hz, receiver_noise_figure_db=receiver_noise_figure_db)
+                   bandwidth_hz=bandwidth_hz, receiver_noise_figure_db=receiver_noise_figure_db,
+                   propagation_model=propagation_model)
 
     gws = list(result.gateways)
     gw_by_id = {g.gw_id: g for g in gws}
