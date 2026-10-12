@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
     "license_user": "",
     "license_code": "",
     "license_key_path": "",   # 인증 때 사용자가 고른 license.key 경로 - 다음 실행에서 자동 로그인에 씀
+    "last_project_path": "",
 }
 
 

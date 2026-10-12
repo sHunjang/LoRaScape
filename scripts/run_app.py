@@ -63,7 +63,7 @@ def main():
             return
 
         splash.update_progress(85, "메인 화면 준비 중...")
-        window = MainWindow(xlsx_path=None, dem_path=paths["dem_path"])
+        window = MainWindow(xlsx_path=None, dem_path=paths["dem_path"], auto_open_project=True)
         main_window_holder["window"] = window
 
         splash.finish_loading(delay_ms=400)
