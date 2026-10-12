@@ -3,9 +3,12 @@
 메인 윈도우임. 툴바 + QSplitter(지도/결과패널) + 상태바 구조.
 core.optimization.gw_placement / data.* 를 직접 씀 (별도 어댑터 레이어 없음).
 """
+import os
+import sqlite3
+
 from PyQt5.QtWidgets import (
     QMainWindow, QToolBar, QAction, QSplitter, QStatusBar, QLabel,
-    QFileDialog, QMessageBox, QMenu, QApplication,
+    QFileDialog, QMessageBox, QMenu, QApplication, QToolButton,
 )
 from PyQt5.QtCore import Qt, QThread
 from PyQt5.QtGui import QCursor
@@ -18,7 +21,8 @@ from lorascape.gui.workers import (
     ReportWorker,
 )
 
-from lorascape.gui.app_config import load_config, analysis_settings_changed
+from lorascape.gui.app_config import load_config, analysis_settings_changed, update_config
+from lorascape.data.project_db import ProjectDB, ProjectError, KIND_GATEWAY, KIND_NODE
 from lorascape.core.propagation.models import model_label
 
 
@@ -64,7 +68,7 @@ def _styled_message_box(parent, icon, title, text) -> QMessageBox:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, xlsx_path: str = None, dem_path: str = None):
+    def __init__(self, xlsx_path: str = None, dem_path: str = None, auto_open_project: bool = False):
         super().__init__()
         self.setWindowTitle("LoRaScape")
         self.resize(1400, 900)
@@ -85,6 +89,8 @@ class MainWindow(QMainWindow):
         self._thread_active = False  # QThread deleteLater 이후에도 안전하게 실행중 여부를 판단하는 플래그
 
         self._settings = load_config()
+
+        self.project: ProjectDB | None = None   # 열려 있는 프로젝트 파일 (없으면 변경 사항이 저장되지 않음)
 
         self._distance_win = None
 
@@ -107,10 +113,16 @@ class MainWindow(QMainWindow):
         if self.dem_path:
             self._init_map_bounds_from_dem()
 
-        if self.xlsx_path:
+        # auto_open_project=True(앱 실행 경로)일 때만 마지막 프로젝트를 다시 엶. 테스트처럼 창만 만드는 곳에서
+        # 개발자 PC의 실제 프로젝트가 열리지 않게 기본값은 False임.
+        project_opened = self.reopen_last_project() if auto_open_project else False
+
+        if self.xlsx_path and not project_opened:
             # ★ 앱 시작 시점의 자동 로딩은 "사용자가 직접 요청한 조작"이 아니라
             # "이전 세션에서 기억해둔 값을 다시 시도해보는 것"이라, 실패해도
             # 팝업으로 방해하지 않고 상태바에만 조용히 표시함.
+            # 프로젝트가 열렸으면 건너뜀: 프로젝트가 장비 목록의 원본이라서, 자동 로딩이 돌면
+            # 사용자가 프로젝트에서 지운 장비를 엑셀이 다음 실행 때마다 되살리게 됨.
             self._load_data(silent=True)
 
     def _build_ui(self):
@@ -128,6 +140,17 @@ class MainWindow(QMainWindow):
         act_profile = QAction("단면도", self)
         act_report = QAction("보고서", self)
         act_settings = QAction("설정", self)
+        act_project = QAction("프로젝트", self)
+        act_defaults = QAction("장비 기본값", self)
+
+        self._project_menu = QMenu(self)
+        self._project_menu.setStyleSheet(CONTEXT_MENU_STYLE)
+        self._project_menu.addAction("새 프로젝트…", self._on_new_project_clicked)
+        self._project_menu.addAction("프로젝트 열기…", self._on_open_project_clicked)
+        self._project_menu.addSeparator()
+        self._project_menu.addAction("프로젝트 백업…", self._on_backup_project_clicked)
+        act_project.setMenu(self._project_menu)
+        act_defaults.triggered.connect(self._open_defaults_dialog)
 
         act_gw_list.triggered.connect(self._open_gw_list)
         act_node_list.triggered.connect(self._open_node_list)
@@ -146,8 +169,13 @@ class MainWindow(QMainWindow):
         tb.addAction(act_suggest_greenfield)
         tb.addAction(act_distance)
         tb.addAction(act_settings)
+        tb.addAction(act_defaults)
         tb.addAction(act_report)
         tb.addAction(act_profile)
+        tb.addAction(act_project)
+        project_button = tb.widgetForAction(act_project)
+        if isinstance(project_button, QToolButton):
+            project_button.setPopupMode(QToolButton.InstantPopup)    # 클릭하면 바로 메뉴가 열리게 함
 
         splitter = QSplitter(Qt.Horizontal)
         self.map_widget = MapWidget()
@@ -265,10 +293,12 @@ class MainWindow(QMainWindow):
         win.raise_()
 
     def _on_gws_changed_from_list(self):
-        """GW 목록창에서 파라미터가 편집되면 지도를 다시 그려서 반영함."""
+        """GW 목록창에서 파라미터가 편집되면 프로젝트에 저장하고 지도를 다시 그려서 반영함."""
+        self._persist_devices(gateways=True)
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
 
     def _on_nodes_changed_from_list(self):
+        self._persist_devices(nodes=True)
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
 
     # ── 데이터 로딩 ──────────────────────────────────────────
@@ -304,36 +334,66 @@ class MainWindow(QMainWindow):
     def _on_data_loaded(self, gateways, nodes, target: str):
         """
         gateways/nodes 중 로드 안 한 쪽은 None으로 들어옴 - 그 경우 기존 값을 그대로 유지함.
+        프로젝트가 열려 있으면 파일의 장비를 프로젝트에 '병합'함: 같은 ID는 위치만 갱신하고 사용자가
+        입력해 둔 성능 값은 보존하며, 파일에 없는 기존 장비는 지우지 않음.
         """
+        notes = []
+        if self.project is not None:
+            try:
+                if gateways is not None:
+                    rep_g = self.project.import_gateways(gateways)
+                    gateways = self.project.load_gateways()
+                    notes.append(self._import_note("GW", rep_g))
+                if nodes is not None:
+                    rep_n = self.project.import_nodes(nodes)
+                    nodes = self.project.load_nodes()
+                    notes.append(self._import_note("Node", rep_n))
+            except (ProjectError, sqlite3.Error, ValueError) as e:
+                self._report_project_error("가져온 장비를 프로젝트에 저장하지 못했습니다", e)
+
         if gateways is not None:
             self.gateways = gateways
         if nodes is not None:
             self.nodes = nodes
 
-        if gateways is not None and nodes is not None:
+        if notes:
+            self.status_label.setText(" / ".join(notes))
+        elif gateways is not None and nodes is not None:
             self.status_label.setText(f"GW {len(self.gateways)}개, Node {len(self.nodes)}개 로드됨")
         elif gateways is not None:
             self.status_label.setText(f"GW {len(self.gateways)}개 로드됨 (Node는 기존 {len(self.nodes)}개 유지)")
         elif nodes is not None:
             self.status_label.setText(f"Node {len(self.nodes)}개 로드됨 (GW는 기존 {len(self.gateways)}개 유지)")
 
-        if self.gateways or self.nodes:
-            all_lats = [g.lat for g in self.gateways] + [n.lat for n in self.nodes]
-            all_lons = [g.lon for g in self.gateways] + [n.lon for n in self.nodes]
-            margin_lat = (max(all_lats) - min(all_lats)) * 0.1 or 0.01
-            margin_lon = (max(all_lons) - min(all_lons)) * 0.1 or 0.01
-            bounds = (
-                min(all_lons) - margin_lon, min(all_lats) - margin_lat,
-                max(all_lons) + margin_lon, max(all_lats) + margin_lat,
-            )
-            self.map_widget.set_bounds(bounds)
-
+        self._fit_map_to_devices()
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
 
         if gateways is not None and self._gw_list_win is not None:
             self._gw_list_win.set_gateways(self.gateways)
         if nodes is not None and self._node_list_win is not None:
             self._node_list_win.set_nodes(self.nodes)
+
+    @staticmethod
+    def _import_note(label: str, rep) -> str:
+        text = f"{label} 가져옴: 추가 {rep.added}, 갱신 {rep.updated}, 변경 없음 {rep.unchanged}"
+        if rep.missing_ids:
+            text += f", 파일에 없는 기존 {len(rep.missing_ids)}개 유지"
+        if rep.protected:
+            text += f", 직접 입력한 값 {len(rep.protected)}개 보호"
+        return text
+
+    def _fit_map_to_devices(self):
+        """GW/Node 위치를 모두 담도록 지도 초기 범위를 맞춤."""
+        if not (self.gateways or self.nodes):
+            return
+        all_lats = [g.lat for g in self.gateways] + [n.lat for n in self.nodes]
+        all_lons = [g.lon for g in self.gateways] + [n.lon for n in self.nodes]
+        margin_lat = (max(all_lats) - min(all_lats)) * 0.1 or 0.01
+        margin_lon = (max(all_lons) - min(all_lons)) * 0.1 or 0.01
+        self.map_widget.set_bounds((
+            min(all_lons) - margin_lon, min(all_lats) - margin_lat,
+            max(all_lons) + margin_lon, max(all_lats) + margin_lat,
+        ))
 
     def _on_data_load_error(self, message: str):
         """
@@ -483,6 +543,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"이동한 GW를 목록에서 찾지 못했습니다: {gw_id}")
             return
         gw.lat, gw.lon = lat, lon
+        self._persist_devices(gateways=True)
         if self._gw_list_win is not None:
             self._gw_list_win.set_gateways(self.gateways)
         self.status_label.setText(
@@ -495,6 +556,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"이동한 단말을 목록에서 찾지 못했습니다: {node_id}")
             return
         node.lat, node.lon = lat, lon
+        self._persist_devices(nodes=True)
         if self._node_list_win is not None:
             self._node_list_win.set_nodes(self.nodes)
         self.status_label.setText(
@@ -592,12 +654,13 @@ class MainWindow(QMainWindow):
         """클릭한 위치에 기본값 GW를 새로 추가함."""
         from lorascape.data.schema import GatewaySite
         new_gw = GatewaySite(
-            gw_id=f"RCLICK_GW_{len(self.gateways) + 1}",
+            gw_id=self._unique_id("RCLICK_GW_", [g.gw_id for g in self.gateways]),
             region="", location_desc="",
             lat=lat, lon=lon,
             install_type="지도에서 추가", power_source="",
         )
         self.gateways.append(new_gw)
+        self._persist_devices(gateways=True)
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
         if self._gw_list_win is not None:
             self._gw_list_win.set_gateways(self.gateways)
@@ -607,12 +670,13 @@ class MainWindow(QMainWindow):
         """클릭한 위치에 기본값 Node를 새로 추가함."""
         from lorascape.data.schema import NodeSite
         new_node = NodeSite(
-            node_id=f"RCLICK_NODE_{len(self.nodes) + 1}",
+            node_id=self._unique_id("RCLICK_NODE_", [n.node_id for n in self.nodes]),
             region="", location_desc="",
             lat=lat, lon=lon,
             device_type="지도에서 추가", install_type="지도에서 추가",
         )
         self.nodes.append(new_node)
+        self._persist_devices(nodes=True)
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
         if self._node_list_win is not None:
             self._node_list_win.set_nodes(self.nodes)
@@ -777,6 +841,7 @@ class MainWindow(QMainWindow):
         이 시점에서야 비로소 제안이 '확정'됨.
         """
         self.gateways.extend(approved_gateways)
+        self._persist_devices(gateways=True)
         self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
         if self._gw_list_win is not None:
             self._gw_list_win.set_gateways(self.gateways)
@@ -859,6 +924,196 @@ class MainWindow(QMainWindow):
 
         self._on_selected_coverage_requested(gw_ids)
 
+
+
+    # ── 프로젝트 파일 ──────────────────────────────────────────
+
+    @staticmethod
+    def _unique_id(prefix: str, existing: list) -> str:
+        """prefix + 번호 중 아직 쓰이지 않은 ID를 돌려줌 (삭제 후 추가해도 ID가 겹치지 않게 함)."""
+        used = set(existing)
+        n = len(used) + 1
+        while f"{prefix}{n}" in used:
+            n += 1
+        return f"{prefix}{n}"
+
+    def _report_project_error(self, headline: str, error: Exception):
+        self.status_label.setText(f"{headline}: {error}")
+        _styled_message_box(self, QMessageBox.Warning, "프로젝트 오류", f"{headline}\n{error}").exec_()
+
+    def _persist_devices(self, gateways: bool = False, nodes: bool = False):
+        """
+        화면의 장비 목록을 프로젝트 파일에 저장함 (프로젝트가 없으면 아무것도 안 함).
+        목록창 편집, 지도 드래그, 우클릭 추가처럼 목록이 바뀔 때마다 부르므로 별도 '저장' 버튼이 필요 없음.
+        """
+        if self.project is None:
+            return
+        try:
+            if gateways:
+                self.project.sync_gateways(self.gateways)
+            if nodes:
+                self.project.sync_nodes(self.nodes)
+        except (ProjectError, sqlite3.Error, ValueError) as e:
+            self._report_project_error("프로젝트 저장에 실패했습니다", e)
+
+    def _attach_project(self, project: ProjectDB, store_current: bool):
+        """
+        열린 프로젝트를 이 창에 연결함.
+        store_current=True: 지금 화면의 장비를 프로젝트에 저장 (새 프로젝트를 만들 때).
+        store_current=False: 프로젝트의 장비로 화면을 바꿈 (기존 프로젝트를 열 때).
+        """
+        if self.project is not None and self.project is not project:
+            self.project.close()
+        self.project = project
+        if store_current:
+            self._persist_devices(gateways=True, nodes=True)
+        else:
+            self.gateways = project.load_gateways()
+            self.nodes = project.load_nodes()
+            self.last_result = None                     # 이전 프로젝트의 결과는 이 장비들의 결과가 아님
+            self._last_result_settings = {}
+            self.result_panel.show_loading()
+            self.result_panel.card_status.set_value("대기 중")
+        self._fit_map_to_devices()
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes)
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        if self._node_list_win is not None:
+            self._node_list_win.set_nodes(self.nodes)
+        name = project.name or os.path.basename(project.path)
+        self.setWindowTitle(f"LoRaScape — {name}")
+        self.status_label.setText(
+            f"프로젝트 '{name}': GW {len(self.gateways)}개, Node {len(self.nodes)}개 (변경 사항은 자동 저장됩니다)"
+        )
+        try:
+            update_config(last_project_path=project.path)
+            self._settings["last_project_path"] = project.path
+        except OSError:
+            pass                                          # 마지막 경로를 기억 못 해도 프로젝트는 정상 동작함
+
+    def _on_new_project_clicked(self):
+        path, _ = QFileDialog.getSaveFileName(self, "새 프로젝트", "", "LoRaScape 프로젝트 (*.lsproj)")
+        if not path:
+            return
+        if not path.lower().endswith(".lsproj"):
+            path += ".lsproj"
+        try:
+            project = ProjectDB.create(path, name=os.path.splitext(os.path.basename(path))[0])
+        except FileExistsError:
+            _styled_message_box(self, QMessageBox.Warning, "알림",
+                                "이미 있는 파일입니다. 기존 프로젝트는 '프로젝트 열기'로 여세요.").exec_()
+            return
+        except (ProjectError, sqlite3.Error, OSError) as e:
+            self._report_project_error("프로젝트를 만들지 못했습니다", e)
+            return
+        self._attach_project(project, store_current=True)
+
+    def _on_open_project_clicked(self):
+        path, _ = QFileDialog.getOpenFileName(self, "프로젝트 열기", "", "LoRaScape 프로젝트 (*.lsproj)")
+        if not path:
+            return
+        if self.project is None and (self.gateways or self.nodes):
+            reply = QMessageBox.question(
+                self, "확인",
+                "저장하지 않은 현재 장비 목록이 프로젝트 내용으로 바뀝니다.\n"
+                "(현재 목록을 보존하려면 먼저 '새 프로젝트'로 저장하세요) 계속할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        self._open_project(path)
+
+    def _open_project(self, path: str) -> bool:
+        try:
+            project = ProjectDB.open(path)
+        except (ProjectError, sqlite3.Error, OSError) as e:
+            self._report_project_error("프로젝트를 열지 못했습니다", e)
+            return False
+        self._attach_project(project, store_current=False)
+        return True
+
+    def reopen_last_project(self) -> bool:
+        """마지막으로 쓴 프로젝트를 조용히 다시 엶 (없거나 못 열면 상태바에만 알리고 넘어감)."""
+        path = self._settings.get("last_project_path", "")
+        if not path:
+            return False
+        if not os.path.exists(path):
+            self.status_label.setText(f"이전 프로젝트 파일을 찾을 수 없습니다: {path}")
+            return False
+        try:
+            project = ProjectDB.open(path)
+        except (ProjectError, sqlite3.Error, OSError) as e:
+            self.status_label.setText(f"이전 프로젝트를 열지 못했습니다: {e}")
+            return False
+        self._attach_project(project, store_current=False)
+        return True
+
+    def _on_backup_project_clicked(self):
+        if self.project is None:
+            _styled_message_box(self, QMessageBox.Information, "알림", "열려 있는 프로젝트가 없습니다.").exec_()
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "프로젝트 백업", "", "LoRaScape 프로젝트 (*.lsproj)")
+        if not path:
+            return
+        if not path.lower().endswith(".lsproj"):
+            path += ".lsproj"
+        try:
+            self.project.backup_to(path, overwrite=True)      # 덮어쓰기 확인은 파일 선택창이 이미 했음
+        except (ProjectError, sqlite3.Error, OSError) as e:
+            self._report_project_error("백업하지 못했습니다", e)
+            return
+        self.status_label.setText(f"프로젝트를 백업했습니다: {path}")
+
+    # ── 장비 기본값 ────────────────────────────────────────────
+
+    def _open_defaults_dialog(self):
+        if self.project is None:
+            reply = QMessageBox.question(
+                self, "확인",
+                "장비 기본값은 프로젝트 파일에 저장됩니다.\n지금 새 프로젝트를 만들까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply != QMessageBox.Yes:
+                return
+            self._on_new_project_clicked()
+            if self.project is None:
+                return
+        from lorascape.gui.widgets.defaults_dialog import DefaultsDialog
+        kinds = (KIND_GATEWAY, KIND_NODE)
+        dlg = DefaultsDialog(
+            {k: self.project.get_defaults(k) for k in kinds},
+            {k: self.project.factory_defaults(k) for k in kinds},
+            {k: self.project.data_fidelity(k) for k in kinds},
+            parent=self,
+        )
+        dlg.sig_defaults_applied.connect(self._on_defaults_applied)
+        dlg.exec_()
+
+    def _on_defaults_applied(self, changes: dict):
+        """바뀐 기본값을 프로젝트에 저장하고, 기본값을 쓰는 장비들의 값을 다시 읽어서 화면에 반영함."""
+        if self.project is None:
+            return
+        try:
+            for kind, params in changes.items():
+                for param, value in params.items():
+                    self.project.set_default(kind, param, value)
+            self.gateways = self.project.load_gateways()
+            self.nodes = self.project.load_nodes()
+        except (ProjectError, sqlite3.Error, ValueError) as e:
+            self._report_project_error("기본값을 저장하지 못했습니다", e)
+            return
+        self.map_widget.refresh(gws=self.gateways, nodes=self.nodes, result=self.last_result)
+        if self._gw_list_win is not None:
+            self._gw_list_win.set_gateways(self.gateways)
+        if self._node_list_win is not None:
+            self._node_list_win.set_nodes(self.nodes)
+        self.status_label.setText(
+            "장비 기본값을 저장했습니다 — 기본값을 쓰는 장비에 적용됩니다. 결과에 반영하려면 'GW 배치 검증'을 다시 실행하세요."
+        )
+
+    def closeEvent(self, event):
+        if self.project is not None:
+            self.project.close()
+            self.project = None
+        super().closeEvent(event)
 
     # ── 리포트 창 ──────────────────────────────────────────────
 
